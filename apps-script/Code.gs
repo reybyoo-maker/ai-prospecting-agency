@@ -3,7 +3,10 @@ const SHEET_NAME = "Leads";
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(SHEET_NAME);
-  if (!sh) sh = ss.insertSheet(SHEET_NAME);
+
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_NAME);
+  }
 
   if (sh.getLastRow() === 0) {
     sh.appendRow([
@@ -22,6 +25,7 @@ function getSheet_() {
     ]);
     sh.setFrozenRows(1);
   }
+
   return sh;
 }
 
@@ -34,29 +38,39 @@ function doPost(e) {
     const data = JSON.parse(e.postData.contents || "{}");
 
     if (!expected || data.token !== expected) {
-      return json_({ok:false, error:"Unauthorized"});
+      return json_({ ok: false, error: "Unauthorized" });
     }
 
     const rows = Array.isArray(data.rows) ? data.rows : [];
     const sh = getSheet_();
 
-    // Dedup berdasarkan URL Instagram.
     const lastRow = sh.getLastRow();
     const existing = new Set();
 
     if (lastRow >= 2) {
-      const urls = sh.getRange(2, 4, lastRow - 1, 1).getValues();
-      urls.forEach(r => {
-        if (r[0]) existing.add(String(r[0]).toLowerCase().trim());
-      });
+      sh.getRange(2, 4, lastRow - 1, 1)
+        .getValues()
+        .forEach(row => {
+          if (row[0]) {
+            existing.add(
+              String(row[0]).toLowerCase().trim()
+            );
+          }
+        });
     }
 
     let added = 0;
 
     rows.forEach(x => {
       const url = String(x.url_instagram || "").trim();
+
       if (!url) return;
-      if (existing.has(url.toLowerCase())) return;
+
+      const key = url.toLowerCase();
+
+      if (existing.has(key)) {
+        return;
+      }
 
       sh.appendRow([
         x.tanggal_ditemukan || "",
@@ -73,11 +87,10 @@ function doPost(e) {
         x.catatan_dm || ""
       ]);
 
-      existing.add(url.toLowerCase());
+      existing.add(key);
       added++;
     });
 
-    // Auto-wrap supaya bukti/alasan mudah dibaca.
     sh.getDataRange().setWrap(true);
 
     return json_({
@@ -87,8 +100,11 @@ function doPost(e) {
       duplicate_skipped: rows.length - added
     });
 
-  } catch (err) {
-    return json_({ok:false, error:String(err)});
+  } catch (error) {
+    return json_({
+      ok: false,
+      error: String(error)
+    });
   }
 }
 

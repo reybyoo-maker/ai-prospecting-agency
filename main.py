@@ -1,5 +1,4 @@
 import os
-import json
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -7,63 +6,86 @@ import requests
 from prospector import collect_prospects
 from gemini_scorer import score_batch
 
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 SHEET_WEBHOOK_URL = os.environ["SHEET_WEBHOOK_URL"]
 WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-def chunks(items, n):
-    for i in range(0, len(items), n):
-        yield items[i:i+n]
+WIB = timezone(timedelta(hours=7))
 
-def post_rows(rows):
-    body = {
-        "token": WEBHOOK_TOKEN,
-        "rows": rows
-    }
-    r = requests.post(SHEET_WEBHOOK_URL, json=body, timeout=60)
-    r.raise_for_status()
-    return r.json()
+def chunks(items, size):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+def send_to_sheet(rows):
+    response = requests.post(
+        SHEET_WEBHOOK_URL,
+        json={
+            "token": WEBHOOK_TOKEN,
+            "rows": rows
+        },
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
 
 def main():
+    print("=== AI PROSPECTING AGENCY ===")
     print("Mencari prospek publik...")
+
     prospects = collect_prospects(max_per_query=5)
-    print(f"Profil unik ditemukan: {len(prospects)}")
 
-    # AI dipanggil dalam batch untuk menghemat quota.
-    scored = []
-    for batch in chunks(prospects[:60], 10):
-        try:
-            results = score_batch(GEMINI_API_KEY, batch)
-            by_id = {int(x["id"]): x for x in results}
-            for idx, lead in enumerate(batch):
-                s = by_id.get(idx, {})
-                scored.append({
-                    "tanggal_ditemukan": (
-                        datetime.now(timezone(timedelta(hours=7)))
-                        .strftime("%Y-%m-%d %H:%M:%S")
-                    ),
-                    "nama_bisnis": s.get("nama_bisnis", ""),
-                    "instagram": lead.get("username", ""),
-                    "url_instagram": lead.get("instagram_url", ""),
-                    "kota": s.get("kota", ""),
-                    "kategori": s.get("kategori", ""),
-                    "bukti_publik": lead.get("public_evidence", ""),
-                    "skor": s.get("skor", 0),
-                    "alasan": s.get("alasan", ""),
-                    "prioritas": s.get("prioritas", "C"),
-                    "status": "BELUM DI-DM",
-                    "catatan_dm": ""
-                })
-        except Exception as e:
-            print("Batch AI gagal:", e)
+    # Batas 60 prospek/run agar tetap hemat API.
+    prospects = prospects[:60]
 
-    # Utamakan prospek A/B, tetap simpan semua hasil yang bisa dinilai.
-    scored.sort(key=lambda x: int(x.get("skor", 0) or 0), reverse=True)
-    print(f"Siap dikirim ke Sheets: {len(scored)}")
+    print(f"Prospek yang akan dinilai AI: {len(prospects)}")
 
-    if scored:
-        result = post_rows(scored)
-        print("Sheets:", result)
+    scored_rows = []
+
+    for batch_no, batch in enumerate(chunks(prospects, 10), start=1):
+        print(f"Menilai batch AI {batch_no}...")
+
+        results = score_batch(GEMINI_API_KEY, batch)
+        results_by_id = {int(item["id"]): item for item in results}
+
+        for idx, lead in enumerate(batch):
+            ai = results_by_id.get(idx, {})
+
+            score = int(ai.get("skor", 0) or 0)
+
+            if score >= 80:
+                priority = "A"
+            elif score >= 65:
+                priority = "B"
+            else:
+                priority = "C"
+
+            scored_rows.append({
+                "tanggal_ditemukan": datetime.now(WIB).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "nama_bisnis": ai.get("nama_bisnis", ""),
+                "instagram": lead.get("username", ""),
+                "url_instagram": lead.get("instagram_url", ""),
+                "kota": ai.get("kota", ""),
+                "kategori": ai.get("kategori", ""),
+                "bukti_publik": lead.get("public_evidence", ""),
+                "skor": score,
+                "alasan": ai.get("alasan", ""),
+                "prioritas": priority,
+                "status": "BELUM DI-DM",
+                "catatan_dm": "",
+            })
+
+    scored_rows.sort(
+        key=lambda x: x.get("skor", 0),
+        reverse=True
+    )
+
+    print(f"Prospek siap dikirim ke Google Sheet: {len(scored_rows)}")
+
+    if scored_rows:
+        result = send_to_sheet(scored_rows)
+        print("HASIL GOOGLE SHEET:", result)
 
 if __name__ == "__main__":
     main()
