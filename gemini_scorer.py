@@ -1,15 +1,27 @@
-import json
 import random
 import time
-import requests
+from typing import List
+
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
 
 MODEL = "gemini-3.6-flash"
 
-ENDPOINT = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    + MODEL
-    + ":generateContent"
-)
+
+class LeadScore(BaseModel):
+    id: int
+    nama_bisnis: str = Field(default="")
+    kota: str = Field(default="")
+    kategori: str = Field(default="")
+    skor: int = Field(default=0, ge=0, le=100)
+    alasan: str = Field(default="")
+    prioritas: str = Field(default="C")
+
+
+class LeadResponse(BaseModel):
+    leads: List[LeadScore]
+
 
 SYSTEM_PROMPT = """
 Kamu adalah AI sales researcher untuk agency landing page Indonesia.
@@ -22,248 +34,188 @@ Prioritaskan:
 - bisnis jasa atau retail;
 - bisnis yang kemungkinan menerima booking, order, reservasi,
   katalog, promo, atau lead WhatsApp;
-- bisnis yang terlihat memiliki peluang memperbaiki alur konversi.
+- bisnis yang tampak memiliki peluang memperbaiki alur konversi.
 
-Jangan mengarang nomor WhatsApp, followers, omzet, alamat, harga,
-website, atau fakta lain.
+Gunakan hanya evidence dan search query yang diberikan.
 
-Gunakan evidence dan query yang diberikan.
-Nama bisnis boleh menggunakan nama pada title/evidence;
-bila tidak jelas gunakan username.
+JANGAN mengarang:
+- nomor WhatsApp
+- followers
+- omzet
+- alamat
+- harga
+- website
+- fakta bisnis lain yang tidak diberikan.
 
-Kembalikan hanya JSON terstruktur.
+Nama bisnis:
+Gunakan nama pada title/evidence jika jelas. Jika tidak jelas,
+gunakan username Instagram.
+
+Kota:
+Isi hanya jika terbukti dari evidence atau query.
+
+Kategori:
+Gunakan kategori bisnis singkat, misalnya Wedding Organizer,
+Rental Mobil, Barbershop, Florist, Cafe.
+
+Skor:
+80-100 = A = sangat prospektif
+65-79 = B = prospektif
+0-64 = C = kurang prospektif
+
+Alasan harus spesifik berdasarkan evidence.
+
+Kembalikan semua ID yang diberikan.
 """
 
-SCHEMA = {
-    "type": "ARRAY",
-    "items": {
-        "type": "OBJECT",
-        "properties": {
-            "id": {"type": "INTEGER"},
-            "nama_bisnis": {"type": "STRING"},
-            "kota": {"type": "STRING"},
-            "kategori": {"type": "STRING"},
-            "skor": {"type": "INTEGER"},
-            "alasan": {"type": "STRING"},
-            "prioritas": {
-                "type": "STRING",
-                "enum": ["A", "B", "C"],
-            },
-        },
-        "required": [
-            "id",
-            "nama_bisnis",
-            "kota",
-            "kategori",
-            "skor",
-            "alasan",
-            "prioritas",
-        ],
-    },
-}
 
-def score_batch(api_key, leads):
+def _client(api_key: str):
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=120_000
+        ),
+    )
+
+
+def score_batch(api_key: str, leads: list):
     payload = []
 
     for idx, lead in enumerate(leads):
         payload.append({
             "id": idx,
-            "instagram": lead.get("username", ""),
+            "username": lead.get("username", ""),
             "instagram_url": lead.get("instagram_url", ""),
             "title": lead.get("search_title", ""),
             "evidence": lead.get(
                 "public_evidence",
-                "",
-            )[:1500],
-            "query": lead.get(
+                ""
+            )[:1400],
+            "search_query": lead.get(
                 "source_query",
-                "",
+                ""
             ),
         })
 
     prompt = (
         SYSTEM_PROMPT
         + "\n\nDATA PROSPEK:\n"
-        + json.dumps(
-            payload,
-            ensure_ascii=False,
-        )
+        + str(payload)
     )
 
-    body = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": SCHEMA,
-            "maxOutputTokens": 5000,
-        },
-    }
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        response_mime_type="application/json",
+        response_schema=LeadResponse,
+        max_output_tokens=5000,
+    )
 
+    client = _client(api_key)
     last_error = ""
 
-    for attempt in range(6):
+    # Smaller batches are intentionally used to reduce malformed/overlong
+    # structured responses.
+    for attempt in range(5):
         try:
-            r = requests.post(
-                ENDPOINT,
-                headers={
-                    "x-goog-api-key": api_key,
-                    "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=120,
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=prompt,
+                config=config,
             )
 
-            if r.status_code in {
-                408, 429, 500, 502, 503, 504
-            }:
-                last_error = (
-                    f"HTTP {r.status_code}: "
-                    f"{r.text[:300]}"
-                )
+            if getattr(response, "parsed", None):
+                parsed = response.parsed
 
-                if attempt < 5:
-                    wait = min(
-                        5 * (2 ** attempt),
-                        60,
-                    ) + random.uniform(0, 2)
-
-                    print(
-                        f"Gemini sementara bermasalah "
-                        f"({r.status_code}); "
-                        f"retry {attempt + 1}/5 "
-                        f"dalam {wait:.1f}s"
-                    )
-                    time.sleep(wait)
-                    continue
-
-                break
-
-            r.raise_for_status()
-
-            data = r.json()
-            candidates = data.get(
-                "candidates",
-                [],
-            )
-
-            if not candidates:
-                raise RuntimeError(
-                    "Gemini tidak mengembalikan candidates."
-                )
-
-            parts = candidates[0].get(
-                "content",
-                {},
-            ).get(
-                "parts",
-                [],
-            )
-
-            if not parts:
-                raise RuntimeError(
-                    "Gemini tidak mengembalikan parts."
-                )
-
-            output = parts[0].get(
-                "text",
-                "",
-            )
-
-            if not output:
-                raise RuntimeError(
-                    "Gemini mengembalikan teks kosong."
-                )
-
-            parsed = json.loads(output)
-
-            if not isinstance(parsed, list):
-                raise ValueError(
-                    "Output Gemini bukan array."
-                )
-
-            clean = []
-
-            for item in parsed:
-                score = int(
-                    item.get("skor", 0) or 0
-                )
-                score = max(
-                    0,
-                    min(100, score),
-                )
-
-                if score >= 80:
-                    priority = "A"
-                elif score >= 65:
-                    priority = "B"
+                if isinstance(parsed, LeadResponse):
+                    result = parsed.leads
+                elif isinstance(parsed, dict):
+                    result = LeadResponse.model_validate(parsed).leads
                 else:
-                    priority = "C"
+                    result = []
 
-                clean.append({
-                    "id": int(
-                        item.get("id", 0)
-                    ),
-                    "nama_bisnis": str(
-                        item.get(
-                            "nama_bisnis",
-                            "",
-                        )
-                    ),
-                    "kota": str(
-                        item.get(
-                            "kota",
-                            "",
-                        )
-                    ),
-                    "kategori": str(
-                        item.get(
-                            "kategori",
-                            "",
-                        )
-                    ),
-                    "skor": score,
-                    "alasan": str(
-                        item.get(
-                            "alasan",
-                            "",
-                        )
-                    ),
-                    "prioritas": priority,
-                })
+                if result:
+                    return [
+                        {
+                            "id": int(x.id),
+                            "nama_bisnis": str(x.nama_bisnis),
+                            "kota": str(x.kota),
+                            "kategori": str(x.kategori),
+                            "skor": max(
+                                0,
+                                min(100, int(x.skor)),
+                            ),
+                            "alasan": str(x.alasan),
+                            "prioritas": (
+                                "A"
+                                if int(x.skor) >= 80
+                                else (
+                                    "B"
+                                    if int(x.skor) >= 65
+                                    else "C"
+                                )
+                            ),
+                        }
+                        for x in result
+                    ]
 
-            return clean
+            # Fallback parsing if SDK does not expose parsed.
+            text = (response.text or "").strip()
+            if text:
+                import json
+                data = json.loads(text)
+                result = LeadResponse.model_validate(data).leads
 
-        except (
-            requests.RequestException,
-            json.JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-        ) as exc:
+                return [
+                    {
+                        "id": int(x.id),
+                        "nama_bisnis": str(x.nama_bisnis),
+                        "kota": str(x.kota),
+                        "kategori": str(x.kategori),
+                        "skor": max(
+                            0,
+                            min(100, int(x.skor)),
+                        ),
+                        "alasan": str(x.alasan),
+                        "prioritas": (
+                            "A"
+                            if int(x.skor) >= 80
+                            else (
+                                "B"
+                                if int(x.skor) >= 65
+                                else "C"
+                            )
+                        ),
+                    }
+                    for x in result
+                ]
+
+            raise RuntimeError(
+                "Gemini tidak mengembalikan hasil terstruktur."
+            )
+
+        except Exception as exc:
             last_error = str(exc)
 
-            if attempt < 5:
+            # google-genai already has retry handling for transient errors.
+            # We add a small application-level retry for any final 5xx/429
+            # surfaced by the SDK.
+            if attempt < 4:
                 wait = min(
-                    5 * (2 ** attempt),
+                    8 * (2 ** attempt),
                     60,
-                ) + random.uniform(0, 2)
+                ) + random.uniform(0, 3)
 
                 print(
-                    f"Gemini retry {attempt + 1}/5 "
+                    f"Gemini retry {attempt + 1}/4 "
                     f"dalam {wait:.1f}s: {last_error}"
                 )
+
                 time.sleep(wait)
                 continue
 
             break
 
     raise RuntimeError(
-        "Gemini gagal setelah 6 percobaan: "
+        "Gemini gagal setelah beberapa percobaan: "
         + last_error
     )
