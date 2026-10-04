@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 14px;
+      margin: 0;
+    }
+
+    h3 {
+      margin-top: 0;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 260px;
+      box-sizing: border-box;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      resize: vertical;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 10px;
+      padding: 11px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    #copyBtn {
+      background: #111;
+      color: white;
+    }
+
+    #openBtn {
+      background: #eee;
+      color: #111;
+    }
+
+    #msg {
+      margin-top: 9px;
+      font-size: 12px;
+      color: #555;
+    }
+  </style>
+</head>
+
+<body>
+  <h3>Template Chat</h3>
+
+  <div style="font-size:12px;color:#666;margin-bottom:8px;">
+    <?= business ?>
+  </div>
+
+  <textarea id="chat"><?= chat ?></textarea>
+
+  <button id="copyBtn" onclick="copyChat()">
+    📋 Copy Chat
+  </button>
+
+  <button id="openBtn" onclick="openInstagram()">
+    Buka Instagram
+  </button>
+
+  <div id="msg"></div>
+
+  <script>
+    const textArea = document.getElementById("chat");
+    const message = document.getElementById("msg");
+
+    function copyChat() {
+      const text = textArea.value;
+
+      navigator.clipboard.writeText(text)
+        .then(() => {
+          message.textContent =
+            "✓ Chat sudah tercopy. Tinggal paste di DM.";
+        })
+        .catch(() => {
+          textArea.focus();
+          textArea.select();
+          document.execCommand("copy");
+          message.textContent =
+            "✓ Chat sudah tercopy. Tinggal paste di DM.";
+        });
+    }
+
+    function openInstagram() {
+      const text = textArea.value;
+      const username = text
+        .match(/@([A-Za-z0-9._]+)/);
+
+      if (username) {
+        window.open(
+          "https://www.instagram.com/" +
+          username[1] +
+          "/",
+          "_blank"
+        );
+      } else {
+        message.textContent =
+          "Buka URL Instagram dari kolom URL Instagram.";
+      }
+    }
+  </script>
+</body>
+</html>
