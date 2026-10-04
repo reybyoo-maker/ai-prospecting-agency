@@ -1,7 +1,6 @@
 import json
 import random
 import time
-
 import requests
 
 MODEL = "gemini-3.6-flash"
@@ -25,59 +24,29 @@ Prioritaskan:
   katalog, promo, atau lead WhatsApp;
 - bisnis yang terlihat memiliki peluang memperbaiki alur konversi.
 
-PENTING:
-Gunakan hanya data yang diberikan.
 Jangan mengarang nomor WhatsApp, followers, omzet, alamat, harga,
 website, atau fakta lain.
 
-Nama bisnis:
-- gunakan nama dari title/evidence bila jelas;
-- bila tidak jelas, gunakan username Instagram.
+Gunakan evidence dan query yang diberikan.
+Nama bisnis boleh menggunakan nama pada title/evidence;
+bila tidak jelas gunakan username.
 
-Kota:
-- isi hanya bila terbukti dari evidence/query.
-
-Kategori:
-- singkat, misalnya "Wedding Organizer", "Rental Mobil", "Barbershop".
-
-Skor:
-80-100 = A, sangat prospektif
-65-79 = B, prospektif
-0-64 = C, kurang prospektif
-
-Alasan harus menjelaskan kenapa bisnis tersebut cocok atau tidak cocok
-untuk ditawari landing page.
-
-Kembalikan HANYA array JSON sesuai schema.
+Kembalikan hanya JSON terstruktur.
 """
 
 SCHEMA = {
-    "type": "array",
+    "type": "ARRAY",
     "items": {
-        "type": "object",
+        "type": "OBJECT",
         "properties": {
-            "id": {
-                "type": "integer",
-            },
-            "nama_bisnis": {
-                "type": "string",
-            },
-            "kota": {
-                "type": "string",
-            },
-            "kategori": {
-                "type": "string",
-            },
-            "skor": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100,
-            },
-            "alasan": {
-                "type": "string",
-            },
+            "id": {"type": "INTEGER"},
+            "nama_bisnis": {"type": "STRING"},
+            "kota": {"type": "STRING"},
+            "kategori": {"type": "STRING"},
+            "skor": {"type": "INTEGER"},
+            "alasan": {"type": "STRING"},
             "prioritas": {
-                "type": "string",
+                "type": "STRING",
                 "enum": ["A", "B", "C"],
             },
         },
@@ -93,41 +62,20 @@ SCHEMA = {
     },
 }
 
-TRANSIENT = {
-    408,
-    429,
-    500,
-    502,
-    503,
-    504,
-}
+def score_batch(api_key, leads):
+    payload = []
 
-def score_batch(
-    api_key: str,
-    leads: list,
-):
-    data = []
-
-    for index, lead in enumerate(leads):
-        data.append({
-            "id": index,
-            "instagram": lead.get(
-                "username",
-                "",
-            ),
-            "instagram_url": lead.get(
-                "instagram_url",
-                "",
-            ),
-            "title": lead.get(
-                "search_title",
-                "",
-            ),
+    for idx, lead in enumerate(leads):
+        payload.append({
+            "id": idx,
+            "instagram": lead.get("username", ""),
+            "instagram_url": lead.get("instagram_url", ""),
+            "title": lead.get("search_title", ""),
             "evidence": lead.get(
                 "public_evidence",
                 "",
-            )[:1600],
-            "search_query": lead.get(
+            )[:1500],
+            "query": lead.get(
                 "source_query",
                 "",
             ),
@@ -137,7 +85,7 @@ def score_batch(
         SYSTEM_PROMPT
         + "\n\nDATA PROSPEK:\n"
         + json.dumps(
-            data,
+            payload,
             ensure_ascii=False,
         )
     )
@@ -146,21 +94,13 @@ def score_batch(
         "contents": [
             {
                 "parts": [
-                    {
-                        "text": prompt,
-                    }
-                ],
+                    {"text": prompt}
+                ]
             }
         ],
         "generationConfig": {
-            # Official Gemini 3.6 guidance: use structured output
-            # and do not send temperature/top_p/top_k.
-            "responseFormat": {
-                "text": {
-                    "mimeType": "application/json",
-                    "schema": SCHEMA,
-                }
-            },
+            "responseMimeType": "application/json",
+            "responseSchema": SCHEMA,
             "maxOutputTokens": 5000,
         },
     }
@@ -179,7 +119,9 @@ def score_batch(
                 timeout=120,
             )
 
-            if r.status_code in TRANSIENT:
+            if r.status_code in {
+                408, 429, 500, 502, 503, 504
+            }:
                 last_error = (
                     f"HTTP {r.status_code}: "
                     f"{r.text[:300]}"
@@ -189,18 +131,14 @@ def score_batch(
                     wait = min(
                         5 * (2 ** attempt),
                         60,
-                    ) + random.uniform(
-                        0,
-                        2,
-                    )
+                    ) + random.uniform(0, 2)
 
                     print(
-                        f"Gemini temporary error "
-                        f"{r.status_code}; "
+                        f"Gemini sementara bermasalah "
+                        f"({r.status_code}); "
                         f"retry {attempt + 1}/5 "
-                        f"in {wait:.1f}s"
+                        f"dalam {wait:.1f}s"
                     )
-
                     time.sleep(wait)
                     continue
 
@@ -208,9 +146,8 @@ def score_batch(
 
             r.raise_for_status()
 
-            payload = r.json()
-
-            candidates = payload.get(
+            data = r.json()
+            candidates = data.get(
                 "candidates",
                 [],
             )
@@ -233,40 +170,32 @@ def score_batch(
                     "Gemini tidak mengembalikan parts."
                 )
 
-            text = parts[0].get(
+            output = parts[0].get(
                 "text",
                 "",
             )
 
-            if not text:
+            if not output:
                 raise RuntimeError(
                     "Gemini mengembalikan teks kosong."
                 )
 
-            result = json.loads(text)
+            parsed = json.loads(output)
 
-            # Validate scoring before sending to Sheet.
-            if not isinstance(result, list):
+            if not isinstance(parsed, list):
                 raise ValueError(
                     "Output Gemini bukan array."
                 )
 
             clean = []
 
-            for item in result:
+            for item in parsed:
                 score = int(
-                    item.get(
-                        "skor",
-                        0,
-                    )
+                    item.get("skor", 0) or 0
                 )
-
                 score = max(
                     0,
-                    min(
-                        100,
-                        score,
-                    ),
+                    min(100, score),
                 )
 
                 if score >= 80:
@@ -278,10 +207,7 @@ def score_batch(
 
                 clean.append({
                     "id": int(
-                        item.get(
-                            "id",
-                            0,
-                        )
+                        item.get("id", 0)
                     ),
                     "nama_bisnis": str(
                         item.get(
@@ -315,10 +241,10 @@ def score_batch(
 
         except (
             requests.RequestException,
+            json.JSONDecodeError,
             ValueError,
             KeyError,
             TypeError,
-            json.JSONDecodeError,
         ) as exc:
             last_error = str(exc)
 
@@ -326,16 +252,12 @@ def score_batch(
                 wait = min(
                     5 * (2 ** attempt),
                     60,
-                ) + random.uniform(
-                    0,
-                    2,
-                )
+                ) + random.uniform(0, 2)
 
                 print(
                     f"Gemini retry {attempt + 1}/5 "
-                    f"in {wait:.1f}s: {last_error}"
+                    f"dalam {wait:.1f}s: {last_error}"
                 )
-
                 time.sleep(wait)
                 continue
 
