@@ -1,51 +1,31 @@
+import os
 import re
 import time
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 
-# Jina Reader can fetch public web pages and return clean text/links.
-# No Jina key is required for the 20 RPM reader limit.
-JINA_READER = "https://r.jina.ai/"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/150.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml",
-}
+TINYFISH_API_KEY = os.environ["TINYFISH_API_KEY"]
+SEARCH_URL = "https://api.search.tinyfish.ai"
 
 CITIES = [
-    # Jabodetabek + Jawa
     "Jakarta", "Bandung", "Bekasi", "Depok", "Tangerang", "Bogor",
     "Cimahi", "Sukabumi", "Cianjur", "Karawang", "Purwakarta",
     "Cirebon", "Tasikmalaya", "Garut", "Serang", "Cilegon", "Tegal",
     "Pekalongan", "Semarang", "Solo", "Yogyakarta", "Magelang",
     "Kudus", "Purwokerto", "Surabaya", "Sidoarjo", "Malang", "Batu",
     "Kediri", "Blitar", "Madiun", "Jember", "Pasuruan", "Probolinggo",
-    "Mojokerto",
-
-    # Sumatra
-    "Medan", "Binjai", "Pematangsiantar", "Padang", "Pekanbaru",
-    "Batam", "Palembang", "Jambi", "Bengkulu", "Bandar Lampung",
-    "Banda Aceh", "Lhokseumawe",
-
-    # Kalimantan
-    "Banjarmasin", "Balikpapan", "Samarinda", "Pontianak",
-    "Palangkaraya", "Banjarbaru",
-
-    # Sulawesi
-    "Makassar", "Manado", "Palu", "Kendari", "Gorontalo",
-    "Parepare",
-
-    # Bali + NTB + NTT
-    "Denpasar", "Badung", "Singaraja", "Mataram", "Kupang",
-
-    # Maluku + Papua
-    "Ambon", "Ternate", "Jayapura", "Sorong", "Manokwari"
+    "Mojokerto", "Medan", "Binjai", "Padang", "Pekanbaru", "Batam",
+    "Palembang", "Jambi", "Bengkulu", "Bandar Lampung", "Banda Aceh",
+    "Lhokseumawe", "Banjarmasin", "Balikpapan", "Samarinda",
+    "Pontianak", "Palangkaraya", "Banjarbaru", "Makassar", "Manado",
+    "Palu", "Kendari", "Gorontalo", "Denpasar", "Badung", "Singaraja",
+    "Mataram", "Kupang", "Ambon", "Ternate", "Jayapura", "Sorong",
+    "Manokwari", "Metro", "Prabumulih", "Lubuklinggau", "Dumai",
+    "Siak", "Bukittinggi", "Padangsidimpuan", "Pematangsiantar",
+    "Tanjungpinang", "Mamuju", "Palopo", "Parepare", "Bitung",
+    "Tomohon", "Baubau", "Lhokseumawe", "Langsa", "Sabang"
 ]
 
 NICHES = [
@@ -59,21 +39,27 @@ NICHES = [
     "studio foto", "studio musik", "klinik hewan", "pet shop",
     "butik", "toko kue", "supplier", "distributor", "car wash",
     "jasa service AC", "dokter umum", "klinik", "kursus mengemudi",
-    "travel agent", "kos", "apartemen", "villa", "hotel"
+    "travel agent", "kos", "villa", "hotel", "coffee roastery",
+    "event organizer", "rental mobil", "rental motor", "jasa wedding"
 ]
 
-def indonesia_now():
-    return datetime.now(timezone(timedelta(hours=7)))
+def normalize_profile(url):
+    if not url:
+        return "", ""
+    u = str(url).strip()
 
-def extract_instagram_profiles(text: str):
-    # Matches only profile-style URLs, not post/reel/promo links.
-    pattern = re.compile(
-        r'https?://(?:www\.)?instagram\.com/([A-Za-z0-9._]{1,50})/?',
-        re.I,
-    )
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
 
-    results = []
-    seen = set()
+    p = urlparse(u)
+    host = p.netloc.lower()
+
+    if "instagram.com" not in host:
+        return "", ""
+
+    parts = [x for x in p.path.split("/") if x]
+    if not parts:
+        return "", ""
 
     banned = {
         "accounts", "about", "developer", "direct", "directory",
@@ -81,158 +67,180 @@ def extract_instagram_profiles(text: str):
         "tv", "p", "web", "emails"
     }
 
-    for m in pattern.finditer(text):
-        username = m.group(1).strip()
-        if username.lower() in banned:
+    username = parts[0].strip()
+
+    if username.lower() in banned:
+        return "", ""
+
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,50}", username):
+        return "", ""
+
+    return username, f"https://www.instagram.com/{username}/"
+
+def extract_profiles(results):
+    found = []
+
+    for result in results:
+        if not isinstance(result, dict):
             continue
 
-        key = username.lower()
-        if key in seen:
+        url_candidates = [
+            result.get("url"),
+            result.get("link"),
+        ]
+
+        text_blob = " ".join([
+            str(result.get("title", "")),
+            str(result.get("snippet", "")),
+            str(result.get("description", "")),
+        ])
+
+        # Try result URL first.
+        username = ""
+        profile_url = ""
+
+        for candidate in url_candidates:
+            username, profile_url = normalize_profile(candidate)
+            if username:
+                break
+
+        # Then search any Instagram URL embedded in title/snippet.
+        if not username:
+            m = re.search(
+                r'https?://(?:www\.)?instagram\.com/[A-Za-z0-9._]{1,50}/?',
+                text_blob,
+                flags=re.I,
+            )
+            if m:
+                username, profile_url = normalize_profile(m.group(0))
+
+        if not username:
             continue
 
-        seen.add(key)
-        start = max(0, m.start() - 450)
-        end = min(len(text), m.end() + 450)
+        evidence = re.sub(r"\s+", " ", text_blob).strip()
 
-        # Keep nearby text as evidence for Gemini.
-        evidence = re.sub(r"\s+", " ", text[start:end]).strip()
-
-        results.append({
+        found.append({
             "username": username,
-            "instagram_url": f"https://www.instagram.com/{username}/",
-            "public_evidence": evidence[:1400],
+            "instagram_url": profile_url,
+            "search_title": str(result.get("title", "")),
+            "public_evidence": evidence[:1800],
         })
+
+    return found
+
+def search(query):
+    response = requests.get(
+        SEARCH_URL,
+        params={
+            "query": query,
+            "location": "Indonesia",
+            "language": "id",
+        },
+        headers={
+            "X-API-Key": TINYFISH_API_KEY,
+            "Accept": "application/json",
+        },
+        timeout=45,
+    )
+
+    if response.status_code == 401:
+        raise RuntimeError("TINYFISH_API_KEY salah/tidak aktif.")
+    if response.status_code == 403:
+        raise RuntimeError("TinyFish menolak request (403).")
+    if response.status_code == 429:
+        raise RuntimeError("TinyFish rate limit (429).")
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    # Support a couple of response shapes.
+    results = data.get("results", [])
+    if not results and isinstance(data.get("web"), dict):
+        results = data["web"].get("results", [])
 
     return results
 
-def jina_fetch_search(target_url: str):
-    # Example:
-    # https://r.jina.ai/http://www.google.com/search?q=...
-    reader_url = JINA_READER + target_url
-    r = requests.get(
-        reader_url,
-        headers=HEADERS,
-        timeout=40,
-    )
-    r.raise_for_status()
+def build_query_pool():
+    pool = []
 
-    if not r.text.strip():
-        raise RuntimeError("Jina Reader mengembalikan halaman kosong.")
+    # Broad variants help capture different business profiles.
+    intent_terms = [
+        '"whatsapp" "link in bio"',
+        '"booking" "link in bio"',
+        '"order" "whatsapp"',
+        '"contact" "whatsapp"',
+    ]
 
-    return r.text
-
-def search_with_jina(engine: str, query: str, count: int = 20):
-    if engine == "google":
-        target = (
-            "https://www.google.com/search?"
-            + urlencode({
-                "q": query,
-                "num": count,
-                "hl": "id",
-                "filter": "0",
-            })
-        )
-    else:
-        target = (
-            "https://www.bing.com/search?"
-            + urlencode({
-                "q": query,
-                "count": count,
-                "setlang": "id-id",
-            })
-        )
-
-    text = jina_fetch_search(target)
-    return extract_instagram_profiles(text)
-
-def build_queries():
-    pairs = []
-
-    # Build a large nationwide pool.
     for city in CITIES:
         for niche in NICHES:
-            q = (
-                f'site:instagram.com "{niche}" "{city}" '
-                f'("whatsapp" OR "booking" OR "order" OR "link in bio")'
-            )
-            pairs.append(q)
+            for intent in intent_terms:
+                pool.append(
+                    f'site:instagram.com "{niche}" "{city}" {intent}'
+                )
 
-    return pairs
+    return pool
 
-def collect_prospects(max_per_query=12, queries_per_run=12):
-    pool = build_queries()
+def collect_prospects(queries_per_run=8, max_per_query=10):
+    pool = build_query_pool()
 
-    now = indonesia_now()
+    now = datetime.now(timezone(timedelta(hours=7)))
 
-    # Rotate the query window each run, so the system does not repeatedly
-    # search the same city/niche combinations.
-    run_slot = (now.hour // 6)
+    # 4 runs/day × 8 queries = 32 search requests/day.
+    # Rotation changes by day + 6-hour slot, avoiding same queries.
+    slot = now.hour // 6
     day_index = now.timetuple().tm_yday
-    start = (day_index * 4 + run_slot * queries_per_run) % len(pool)
+
+    start = (day_index * 4 + slot) * queries_per_run
+    start %= len(pool)
+
     selected = [
         pool[(start + i) % len(pool)]
         for i in range(queries_per_run)
     ]
 
-    found = {}
     print(
-        f"Nationwide search | {queries_per_run} queries/run | "
-        f"rotation index {start}"
+        f"Nationwide TinyFish search | "
+        f"{queries_per_run} queries/run | index={start}"
     )
 
-    # Jina Reader without a key is limited to 20 RPM, so spacing requests
-    # keeps us well below that ceiling.
-    for i, query in enumerate(selected, start=1):
-        success = False
+    found = {}
 
-        for engine in ("google", "bing"):
-            try:
-                profiles = search_with_jina(
-                    engine,
-                    query,
-                    count=max_per_query * 2
-                )
+    for idx, query in enumerate(selected, start=1):
+        try:
+            results = search(query)
 
-                if profiles:
-                    success = True
+            profiles = extract_profiles(results)
 
-                    for profile in profiles[:max_per_query]:
-                        key = profile["username"].lower()
+            for profile in profiles[:max_per_query]:
+                key = profile["username"].lower()
 
-                        if key not in found:
-                            found[key] = {
-                                "username": profile["username"],
-                                "instagram_url": profile["instagram_url"],
-                                "search_title": "",
-                                "public_evidence": profile["public_evidence"],
-                                "source_query": query,
-                            }
+                if key not in found:
+                    found[key] = {
+                        **profile,
+                        "source_query": query,
+                    }
 
-                    print(
-                        f"Query {i}/{queries_per_run} | "
-                        f"{engine} | {len(profiles)} profil"
-                    )
-                    break
+            print(
+                f"Query {idx}/{queries_per_run} | "
+                f"{len(results)} results | "
+                f"{len(profiles)} Instagram profiles"
+            )
 
-            except Exception as exc:
-                print(
-                    f"Query {i}/{queries_per_run} | "
-                    f"{engine} gagal: {exc}"
-                )
+        except Exception as exc:
+            print(
+                f"Query {idx}/{queries_per_run} | FAILED | {exc}"
+            )
 
-        if not success:
-            print(f"Query {i}/{queries_per_run} | tidak menemukan profil.")
-
-        # Stay under Jina Reader's no-key rate limit.
-        time.sleep(4)
+        # Keep comfortably under TinyFish's published 30 requests/minute.
+        time.sleep(3)
 
     print(f"Profil unik kandidat: {len(found)}")
 
     if not found:
         raise RuntimeError(
-            "Tidak ada kandidat Instagram ditemukan. "
-            "Search layer tidak menghasilkan profil publik."
+            "0 kandidat Instagram ditemukan. "
+            "Periksa TINYFISH_API_KEY atau log search."
         )
 
-    # Limit candidate volume before Gemini.
     return list(found.values())[:100]

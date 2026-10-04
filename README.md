@@ -1,62 +1,47 @@
-# AI Prospecting Agency — Nasional
+# AI Prospecting Agency — Indonesia
 
-Tujuan:
-Mengumpulkan kandidat prospek bisnis Indonesia untuk ditawari jasa landing page.
+Search:
+TinyFish Search API
 
-Alur:
-Web publik → Jina Reader → kandidat Instagram → Gemini 3.6 Flash → Google Sheets.
+AI:
+Gemini 3.6 Flash
 
-Tidak ada login Instagram dan tidak ada auto-DM.
+Database:
+Google Sheets via Apps Script Web App
 
-## Volume target
-
-Konfigurasi:
-- 12 query per run
-- maksimal 100 kandidat yang dinilai AI per run
-- 4 scheduled runs per hari
-- kapasitas teoritis maksimal 400 baris kandidat/hari
-
-Catatan: 400/hari adalah batas konfigurasi, bukan jaminan. Hasil nyata
-bergantung pada jumlah profil publik yang ditemukan, duplikasi, dan rate limit.
-
-## Gemini
-
-Model:
-`gemini-3.6-flash`
+Automation:
+GitHub Actions
 
 ## GitHub Secrets
 
+Existing:
 - GEMINI_API_KEY
 - SHEET_WEBHOOK_URL
 - WEBHOOK_TOKEN
 
-## Jadwal WIB
+New:
+- TINYFISH_API_KEY
+
+## Volume
+
+8 search queries per scheduled run.
+4 scheduled runs per day.
+Up to 100 candidates sent to Gemini per run.
+
+The actual result depends on search results, duplicate filtering,
+rate limits, and Gemini quota.
+
+## Schedule (WIB)
 
 02:00
 08:00
 14:00
 20:00
 
-## Google Sheet
+## Search
 
-Nama tab:
-`Leads`
+Queries rotate through Indonesian cities and business niches,
+with intent terms such as WhatsApp, booking, order, and link in bio.
 
-Kolom:
-Tanggal ditemukan | Nama bisnis | Instagram | URL Instagram | Kota |
-Kategori | Bukti publik | Skor | Alasan | Prioritas | Status | Catatan DM
-
-Status awal:
-`BELUM DI-DM`
-
-## Search layer
-
-Menggunakan Jina Reader untuk membaca halaman pencarian web publik.
-Jina mencantumkan 20 RPM untuk Reader API tanpa API key; free API key dapat
-memberikan rate limit yang lebih tinggi. Jangan menganggap volume unlimited.
-
-## Catatan penting
-
-Agent hanya mengambil hasil web publik yang dapat diakses.
-Kualitas data bergantung pada hasil index mesin pencari.
-Gunakan database ini untuk outreach manual yang relevan, bukan spam massal.
+The system does not log into Instagram and does not send DMs.
+The output is for manual, relevant outreach.

@@ -2,7 +2,6 @@ const SHEET_NAME = "Leads";
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-
   let sh = ss.getSheetByName(SHEET_NAME);
 
   if (!sh) {
@@ -22,7 +21,7 @@ function getSheet_() {
       "Alasan",
       "Prioritas",
       "Status",
-      "Catatan DM"
+      "Catatan DM",
     ]);
 
     sh.setFrozenRows(1);
@@ -33,7 +32,7 @@ function getSheet_() {
 
 function doPost(e) {
   try {
-    const token = PropertiesService
+    const expected = PropertiesService
       .getScriptProperties()
       .getProperty("WEBHOOK_TOKEN");
 
@@ -41,10 +40,10 @@ function doPost(e) {
       e.postData.contents || "{}"
     );
 
-    if (!token || body.token !== token) {
+    if (!expected || body.token !== expected) {
       return json_({
         ok: false,
-        error: "Unauthorized"
+        error: "Unauthorized",
       });
     }
 
@@ -53,20 +52,15 @@ function doPost(e) {
       : [];
 
     const sh = getSheet_();
-
     const existing = new Set();
 
     if (sh.getLastRow() >= 2) {
-      const urls = sh
-        .getRange(
-          2,
-          4,
-          sh.getLastRow() - 1,
-          1
-        )
-        .getValues();
-
-      urls.forEach(row => {
+      sh.getRange(
+        2,
+        4,
+        sh.getLastRow() - 1,
+        1
+      ).getValues().forEach(row => {
         if (row[0]) {
           existing.add(
             String(row[0])
@@ -88,9 +82,7 @@ function doPost(e) {
 
       const key = url.toLowerCase();
 
-      if (existing.has(key)) {
-        return;
-      }
+      if (existing.has(key)) return;
 
       sh.appendRow([
         row.tanggal_ditemukan || "",
@@ -104,7 +96,7 @@ function doPost(e) {
         row.alasan || "",
         row.prioritas || "",
         row.status || "BELUM DI-DM",
-        row.catatan_dm || ""
+        row.catatan_dm || "",
       ]);
 
       existing.add(key);
@@ -117,13 +109,13 @@ function doPost(e) {
       ok: true,
       received: rows.length,
       added: added,
-      duplicates: rows.length - added
+      duplicates: rows.length - added,
     });
 
-  } catch (error) {
+  } catch (err) {
     return json_({
       ok: false,
-      error: String(error)
+      error: String(err),
     });
   }
 }
@@ -132,16 +124,12 @@ function doGet() {
   return json_({
     ok: true,
     service: "AI Prospecting Agency",
-    sheet: SHEET_NAME
+    sheet: SHEET_NAME,
   });
 }
 
 function json_(obj) {
   return ContentService
-    .createTextOutput(
-      JSON.stringify(obj)
-    )
-    .setMimeType(
-      ContentService.MimeType.JSON
-    );
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }

@@ -12,16 +12,15 @@ WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
 
 WIB = timezone(timedelta(hours=7))
 
-# 100 candidates/run x 4 scheduled runs = up to 400 candidate rows/day.
-MAX_CANDIDATES_PER_RUN = 100
-AI_BATCH_SIZE = 50
+MAX_CANDIDATES = 100
+AI_BATCH_SIZE = 40
 
 def chunks(items, size):
     for i in range(0, len(items), size):
         yield items[i:i + size]
 
 def send_to_sheet(rows):
-    response = requests.post(
+    r = requests.post(
         SHEET_WEBHOOK_URL,
         json={
             "token": WEBHOOK_TOKEN,
@@ -29,18 +28,20 @@ def send_to_sheet(rows):
         },
         timeout=90,
     )
-    response.raise_for_status()
-    return response.json()
+    r.raise_for_status()
+    return r.json()
 
 def main():
     print("=== AI PROSPECTING AGENCY — INDONESIA ===")
+    print("Search layer: TinyFish")
+    print("AI layer: Gemini 3.6 Flash")
 
     prospects = collect_prospects(
-        max_per_query=12,
-        queries_per_run=12,
+        queries_per_run=8,
+        max_per_query=10,
     )
 
-    prospects = prospects[:MAX_CANDIDATES_PER_RUN]
+    prospects = prospects[:MAX_CANDIDATES]
 
     print(
         f"Kandidat yang akan dinilai Gemini: "
@@ -51,21 +52,21 @@ def main():
 
     for batch_no, batch in enumerate(
         chunks(prospects, AI_BATCH_SIZE),
-        start=1
+        start=1,
     ):
         print(
             f"Gemini scoring batch {batch_no} "
-            f"({len(batch)} prospek)..."
+            f"({len(batch)} kandidat)..."
         )
 
-        scored = score_batch(
+        results = score_batch(
             GEMINI_API_KEY,
-            batch
+            batch,
         )
 
         by_id = {
             int(x["id"]): x
-            for x in scored
+            for x in results
         }
 
         for idx, lead in enumerate(batch):
@@ -86,30 +87,15 @@ def main():
                 ),
                 "nama_bisnis": ai.get(
                     "nama_bisnis",
-                    lead.get("username", "")
+                    lead.get("search_title", lead.get("username", "")),
                 ),
-                "instagram": lead.get(
-                    "username",
-                    ""
-                ),
-                "url_instagram": lead.get(
-                    "instagram_url",
-                    ""
-                ),
+                "instagram": lead.get("username", ""),
+                "url_instagram": lead.get("instagram_url", ""),
                 "kota": ai.get("kota", ""),
-                "kategori": ai.get(
-                    "kategori",
-                    ""
-                ),
-                "bukti_publik": lead.get(
-                    "public_evidence",
-                    ""
-                ),
+                "kategori": ai.get("kategori", ""),
+                "bukti_publik": lead.get("public_evidence", ""),
                 "skor": score,
-                "alasan": ai.get(
-                    "alasan",
-                    ""
-                ),
+                "alasan": ai.get("alasan", ""),
                 "prioritas": priority,
                 "status": "BELUM DI-DM",
                 "catatan_dm": "",
@@ -117,11 +103,11 @@ def main():
 
     rows.sort(
         key=lambda x: x.get("skor", 0),
-        reverse=True
+        reverse=True,
     )
 
     print(
-        f"Total hasil AI: {len(rows)}. "
+        f"Hasil AI: {len(rows)} baris. "
         f"Mengirim ke Google Sheet..."
     )
 
