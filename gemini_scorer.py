@@ -1,5 +1,7 @@
 import json
+import random
 import time
+
 import requests
 
 MODEL = "gemini-3.6-flash"
@@ -33,16 +35,9 @@ Nilai:
 0-64 = kurang prospektif (C)
 
 Jawab HANYA JSON array valid.
-
-Field:
-id
-nama_bisnis
-kota
-kategori
-skor
-alasan
-prioritas
 """
+
+TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
 
 def extract_json(text):
     text = text.strip()
@@ -58,7 +53,9 @@ def extract_json(text):
     end = text.rfind("]")
 
     if start < 0 or end < 0:
-        raise ValueError("Respons Gemini tidak berisi JSON array.")
+        raise ValueError(
+            "Respons Gemini tidak berisi JSON array."
+        )
 
     return json.loads(text[start:end + 1])
 
@@ -71,14 +68,19 @@ def score_batch(api_key, leads):
             "username": lead.get("username", ""),
             "instagram_url": lead.get("instagram_url", ""),
             "title": lead.get("search_title", ""),
-            "evidence": lead.get("public_evidence", "")[:1500],
+            "evidence": lead.get(
+                "public_evidence", ""
+            )[:1500],
             "query": lead.get("source_query", ""),
         })
 
     prompt = (
         SYSTEM_PROMPT
         + "\n\nDATA PROSPEK:\n"
-        + json.dumps(payload, ensure_ascii=False)
+        + json.dumps(
+            payload,
+            ensure_ascii=False
+        )
         + "\n\nKembalikan JSON array valid."
     )
 
@@ -93,26 +95,99 @@ def score_batch(api_key, leads):
         "generationConfig": {
             "temperature": 0.1,
             "responseMimeType": "application/json",
+            "maxOutputTokens": 3000,
         },
     }
 
-    for attempt in range(3):
-        r = requests.post(
-            ENDPOINT,
-            params={"key": api_key},
-            json=body,
-            timeout=90,
-        )
+    last_error = None
 
-        if r.status_code == 429 and attempt < 2:
-            time.sleep(15 * (attempt + 1))
-            continue
+    # 6 attempts: 5s, 10s, 20s, 40s, 60s, 60s (+ small jitter).
+    for attempt in range(6):
+        try:
+            r = requests.post(
+                ENDPOINT,
+                params={"key": api_key},
+                json=body,
+                timeout=120,
+            )
 
-        r.raise_for_status()
+            if r.status_code in TRANSIENT_STATUS:
+                last_error = (
+                    f"Gemini HTTP {r.status_code}: "
+                    f"{r.text[:500]}"
+                )
 
-        data = r.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+                if attempt < 5:
+                    wait = min(
+                        5 * (2 ** attempt),
+                        60
+                    )
+                    wait += random.uniform(0, 2)
 
-        return extract_json(text)
+                    print(
+                        f"Gemini sementara tidak tersedia "
+                        f"({r.status_code}). "
+                        f"Retry {attempt + 1}/5 dalam "
+                        f"{wait:.1f} detik..."
+                    )
+                    time.sleep(wait)
+                    continue
 
-    raise RuntimeError("Gemini gagal setelah beberapa percobaan.")
+                break
+
+            r.raise_for_status()
+
+            data = r.json()
+
+            candidates = data.get(
+                "candidates",
+                []
+            )
+
+            if not candidates:
+                raise RuntimeError(
+                    "Gemini mengembalikan 0 candidates."
+                )
+
+            parts = candidates[0].get(
+                "content",
+                {}
+            ).get("parts", [])
+
+            if not parts:
+                raise RuntimeError(
+                    "Respons Gemini tidak memiliki parts."
+                )
+
+            text = parts[0].get("text", "")
+
+            if not text:
+                raise RuntimeError(
+                    "Gemini mengembalikan teks kosong."
+                )
+
+            return extract_json(text)
+
+        except requests.RequestException as exc:
+            last_error = str(exc)
+
+            if attempt < 5:
+                wait = min(
+                    5 * (2 ** attempt),
+                    60
+                ) + random.uniform(0, 2)
+
+                print(
+                    f"Gemini request error. "
+                    f"Retry {attempt + 1}/5 dalam "
+                    f"{wait:.1f} detik..."
+                )
+                time.sleep(wait)
+                continue
+
+            break
+
+    raise RuntimeError(
+        "Gemini gagal setelah 6 percobaan. "
+        f"Error terakhir: {last_error}"
+    )
