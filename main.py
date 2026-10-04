@@ -12,6 +12,10 @@ WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
 
 WIB = timezone(timedelta(hours=7))
 
+# 100 candidates/run x 4 scheduled runs = up to 400 candidate rows/day.
+MAX_CANDIDATES_PER_RUN = 100
+AI_BATCH_SIZE = 50
+
 def chunks(items, size):
     for i in range(0, len(items), size):
         yield items[i:i + size]
@@ -21,34 +25,51 @@ def send_to_sheet(rows):
         SHEET_WEBHOOK_URL,
         json={
             "token": WEBHOOK_TOKEN,
-            "rows": rows
+            "rows": rows,
         },
-        timeout=60,
+        timeout=90,
     )
     response.raise_for_status()
     return response.json()
 
 def main():
-    print("=== AI PROSPECTING AGENCY ===")
-    print("Mencari prospek publik...")
+    print("=== AI PROSPECTING AGENCY — INDONESIA ===")
 
-    prospects = collect_prospects(max_per_query=5)
+    prospects = collect_prospects(
+        max_per_query=12,
+        queries_per_run=12,
+    )
 
-    # Batas 60 prospek/run agar tetap hemat API.
-    prospects = prospects[:60]
+    prospects = prospects[:MAX_CANDIDATES_PER_RUN]
 
-    print(f"Prospek yang akan dinilai AI: {len(prospects)}")
+    print(
+        f"Kandidat yang akan dinilai Gemini: "
+        f"{len(prospects)}"
+    )
 
-    scored_rows = []
+    rows = []
 
-    for batch_no, batch in enumerate(chunks(prospects, 10), start=1):
-        print(f"Menilai batch AI {batch_no}...")
+    for batch_no, batch in enumerate(
+        chunks(prospects, AI_BATCH_SIZE),
+        start=1
+    ):
+        print(
+            f"Gemini scoring batch {batch_no} "
+            f"({len(batch)} prospek)..."
+        )
 
-        results = score_batch(GEMINI_API_KEY, batch)
-        results_by_id = {int(item["id"]): item for item in results}
+        scored = score_batch(
+            GEMINI_API_KEY,
+            batch
+        )
+
+        by_id = {
+            int(x["id"]): x
+            for x in scored
+        }
 
         for idx, lead in enumerate(batch):
-            ai = results_by_id.get(idx, {})
+            ai = by_id.get(idx, {})
 
             score = int(ai.get("skor", 0) or 0)
 
@@ -59,33 +80,54 @@ def main():
             else:
                 priority = "C"
 
-            scored_rows.append({
+            rows.append({
                 "tanggal_ditemukan": datetime.now(WIB).strftime(
                     "%Y-%m-%d %H:%M:%S"
                 ),
-                "nama_bisnis": ai.get("nama_bisnis", ""),
-                "instagram": lead.get("username", ""),
-                "url_instagram": lead.get("instagram_url", ""),
+                "nama_bisnis": ai.get(
+                    "nama_bisnis",
+                    lead.get("username", "")
+                ),
+                "instagram": lead.get(
+                    "username",
+                    ""
+                ),
+                "url_instagram": lead.get(
+                    "instagram_url",
+                    ""
+                ),
                 "kota": ai.get("kota", ""),
-                "kategori": ai.get("kategori", ""),
-                "bukti_publik": lead.get("public_evidence", ""),
+                "kategori": ai.get(
+                    "kategori",
+                    ""
+                ),
+                "bukti_publik": lead.get(
+                    "public_evidence",
+                    ""
+                ),
                 "skor": score,
-                "alasan": ai.get("alasan", ""),
+                "alasan": ai.get(
+                    "alasan",
+                    ""
+                ),
                 "prioritas": priority,
                 "status": "BELUM DI-DM",
                 "catatan_dm": "",
             })
 
-    scored_rows.sort(
+    rows.sort(
         key=lambda x: x.get("skor", 0),
         reverse=True
     )
 
-    print(f"Prospek siap dikirim ke Google Sheet: {len(scored_rows)}")
+    print(
+        f"Total hasil AI: {len(rows)}. "
+        f"Mengirim ke Google Sheet..."
+    )
 
-    if scored_rows:
-        result = send_to_sheet(scored_rows)
-        print("HASIL GOOGLE SHEET:", result)
+    if rows:
+        result = send_to_sheet(rows)
+        print("GOOGLE SHEET:", result)
 
 if __name__ == "__main__":
     main()

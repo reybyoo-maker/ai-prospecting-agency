@@ -1,8 +1,8 @@
 import json
+import time
 import requests
 
 MODEL = "gemini-3.6-flash"
-
 ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     + MODEL
@@ -12,93 +12,103 @@ ENDPOINT = (
 SYSTEM_PROMPT = """
 Kamu adalah AI sales research assistant untuk agency landing page di Indonesia.
 
-Nilai setiap prospek bisnis dari 0-100 berdasarkan seberapa masuk akal
-ditawari jasa landing page.
+Nilai prospek bisnis dari 0-100 berdasarkan kemungkinan bisnis tersebut
+cocok ditawari jasa landing page.
 
 Prioritaskan:
-- bisnis jasa / retail;
-- bisnis yang tampak menerima booking, reservasi, order, katalog, promo,
-  lead WhatsApp, formulir, atau penjualan;
-- bisnis yang tampak belum memiliki jalur website/landing page yang jelas.
+- bisnis lokal Indonesia;
+- jasa atau retail;
+- bisnis yang kemungkinan menerima booking, order, reservasi,
+  katalog, promo, atau lead WhatsApp;
+- bisnis yang tampak memiliki peluang memperbaiki alur konversi.
 
-Jangan mengarang fakta.
-Jangan mengarang nomor WhatsApp, followers, omzet, alamat, atau website.
-Gunakan hanya informasi pada data yang diberikan.
+Jangan mengarang:
+- nomor WhatsApp
+- followers
+- omzet
+- alamat
+- website
+- harga
+- informasi bisnis yang tidak terdapat di evidence.
 
-Skala:
-A = 80-100
-B = 65-79
-C = 0-64
+Nama bisnis boleh diambil dari username/evidence jika cukup jelas.
 
-Jawab HANYA JSON array yang valid.
+Output JSON array saja.
+
+Field:
+id
+nama_bisnis
+kota
+kategori
+skor
+alasan
+prioritas
+
+Prioritas:
+A = skor 80-100
+B = skor 65-79
+C = skor 0-64
 """
 
-def extract_json(text: str):
+def extract_json(text):
     text = text.strip()
 
-    if text.startswith("```"):
-        text = text.strip("`")
-        if "\n" in text:
-            text = text.split("\n", 1)[1]
+    if "```" in text:
+        text = text.replace("```json", "").replace("```", "").strip()
 
     start = text.find("[")
     end = text.rfind("]")
 
-    if start == -1 or end == -1:
-        raise ValueError("Respons Gemini tidak berisi JSON array.")
+    if start < 0 or end < 0:
+        raise ValueError("Gemini tidak mengembalikan JSON array.")
 
     return json.loads(text[start:end + 1])
 
-def score_batch(api_key: str, leads: list):
+def score_batch(api_key, leads):
     payload = []
 
-    for i, lead in enumerate(leads):
+    for idx, lead in enumerate(leads):
         payload.append({
-            "id": i,
+            "id": idx,
             "username": lead.get("username", ""),
             "instagram_url": lead.get("instagram_url", ""),
-            "title": lead.get("search_title", ""),
-            "evidence": lead.get("public_evidence", ""),
-            "search_query": lead.get("source_query", ""),
+            "evidence": lead.get("public_evidence", "")[:1400],
+            "query": lead.get("source_query", ""),
         })
 
     prompt = (
         SYSTEM_PROMPT
-        + "\n\nDATA PROSPEK:\n"
+        + "\n\nDATA:\n"
         + json.dumps(payload, ensure_ascii=False)
-        + """
-
-Kembalikan field persis:
-id, nama_bisnis, kota, kategori, skor, alasan, prioritas
-
-Jadikan string kosong untuk nama/kota/kategori yang tidak cukup terbukti.
-"""
+        + "\n\nKembalikan JSON array valid."
     )
 
     body = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
+        "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "responseMimeType": "application/json"
-        }
+            "responseMimeType": "application/json",
+        },
     }
 
-    response = requests.post(
-        ENDPOINT,
-        params={"key": api_key},
-        json=body,
-        timeout=60,
-    )
-    response.raise_for_status()
+    for attempt in range(3):
+        response = requests.post(
+            ENDPOINT,
+            params={"key": api_key},
+            json=body,
+            timeout=90,
+        )
 
-    data = response.json()
+        if response.status_code == 429 and attempt < 2:
+            time.sleep(20 * (attempt + 1))
+            continue
 
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
+        response.raise_for_status()
 
-    return extract_json(text)
+        data = response.json()
+
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+        return extract_json(text)
+
+    raise RuntimeError("Gemini gagal setelah beberapa percobaan.")

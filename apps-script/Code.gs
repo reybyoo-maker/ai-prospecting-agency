@@ -2,6 +2,7 @@ const SHEET_NAME = "Leads";
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+
   let sh = ss.getSheetByName(SHEET_NAME);
 
   if (!sh) {
@@ -23,6 +24,7 @@ function getSheet_() {
       "Status",
       "Catatan DM"
     ]);
+
     sh.setFrozenRows(1);
   }
 
@@ -31,38 +33,56 @@ function getSheet_() {
 
 function doPost(e) {
   try {
-    const expected = PropertiesService
+    const token = PropertiesService
       .getScriptProperties()
       .getProperty("WEBHOOK_TOKEN");
 
-    const data = JSON.parse(e.postData.contents || "{}");
+    const body = JSON.parse(
+      e.postData.contents || "{}"
+    );
 
-    if (!expected || data.token !== expected) {
-      return json_({ ok: false, error: "Unauthorized" });
+    if (!token || body.token !== token) {
+      return json_({
+        ok: false,
+        error: "Unauthorized"
+      });
     }
 
-    const rows = Array.isArray(data.rows) ? data.rows : [];
+    const rows = Array.isArray(body.rows)
+      ? body.rows
+      : [];
+
     const sh = getSheet_();
 
-    const lastRow = sh.getLastRow();
     const existing = new Set();
 
-    if (lastRow >= 2) {
-      sh.getRange(2, 4, lastRow - 1, 1)
-        .getValues()
-        .forEach(row => {
-          if (row[0]) {
-            existing.add(
-              String(row[0]).toLowerCase().trim()
-            );
-          }
-        });
+    if (sh.getLastRow() >= 2) {
+      const urls = sh
+        .getRange(
+          2,
+          4,
+          sh.getLastRow() - 1,
+          1
+        )
+        .getValues();
+
+      urls.forEach(row => {
+        if (row[0]) {
+          existing.add(
+            String(row[0])
+              .toLowerCase()
+              .trim()
+          );
+        }
+      });
     }
 
     let added = 0;
 
-    rows.forEach(x => {
-      const url = String(x.url_instagram || "").trim();
+    rows.forEach(row => {
+      const url = String(
+        row.url_instagram || ""
+      ).trim();
 
       if (!url) return;
 
@@ -73,18 +93,18 @@ function doPost(e) {
       }
 
       sh.appendRow([
-        x.tanggal_ditemukan || "",
-        x.nama_bisnis || "",
-        x.instagram || "",
+        row.tanggal_ditemukan || "",
+        row.nama_bisnis || "",
+        row.instagram || "",
         url,
-        x.kota || "",
-        x.kategori || "",
-        x.bukti_publik || "",
-        Number(x.skor || 0),
-        x.alasan || "",
-        x.prioritas || "",
-        x.status || "BELUM DI-DM",
-        x.catatan_dm || ""
+        row.kota || "",
+        row.kategori || "",
+        row.bukti_publik || "",
+        Number(row.skor || 0),
+        row.alasan || "",
+        row.prioritas || "",
+        row.status || "BELUM DI-DM",
+        row.catatan_dm || ""
       ]);
 
       existing.add(key);
@@ -97,7 +117,7 @@ function doPost(e) {
       ok: true,
       received: rows.length,
       added: added,
-      duplicate_skipped: rows.length - added
+      duplicates: rows.length - added
     });
 
   } catch (error) {
@@ -118,6 +138,10 @@ function doGet() {
 
 function json_(obj) {
   return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+    .createTextOutput(
+      JSON.stringify(obj)
+    )
+    .setMimeType(
+      ContentService.MimeType.JSON
+    );
 }
