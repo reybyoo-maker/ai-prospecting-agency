@@ -13,123 +13,194 @@ ENDPOINT = (
 )
 
 SYSTEM_PROMPT = """
-Kamu adalah AI sales researcher untuk agency landing page di Indonesia.
+Kamu adalah AI sales researcher untuk agency landing page Indonesia.
 
-Tugas:
-Menilai apakah sebuah profil bisnis layak ditawari jasa landing page.
+Nilai setiap profil bisnis dari 0 sampai 100 berdasarkan kemungkinan
+bisnis tersebut cocok ditawari jasa landing page.
 
-Prioritas tinggi:
+Prioritaskan:
 - bisnis lokal Indonesia;
-- jasa atau retail;
-- bisnis yang menerima booking, reservasi, order, katalog, promo,
-  WhatsApp leads, formulir, atau penjualan;
-- bisnis yang tampak belum memiliki alur website/landing page yang kuat.
+- bisnis jasa atau retail;
+- bisnis yang kemungkinan menerima booking, order, reservasi,
+  katalog, promo, atau lead WhatsApp;
+- bisnis yang terlihat memiliki peluang memperbaiki alur konversi.
 
-Gunakan hanya evidence yang diberikan.
-JANGAN mengarang nomor WhatsApp, followers, omzet, alamat, harga,
+PENTING:
+Gunakan hanya data yang diberikan.
+Jangan mengarang nomor WhatsApp, followers, omzet, alamat, harga,
 website, atau fakta lain.
 
-Nilai:
-80-100 = sangat prospektif (A)
-65-79 = prospektif (B)
-0-64 = kurang prospektif (C)
+Nama bisnis:
+- gunakan nama dari title/evidence bila jelas;
+- bila tidak jelas, gunakan username Instagram.
 
-Jawab HANYA JSON array valid.
+Kota:
+- isi hanya bila terbukti dari evidence/query.
+
+Kategori:
+- singkat, misalnya "Wedding Organizer", "Rental Mobil", "Barbershop".
+
+Skor:
+80-100 = A, sangat prospektif
+65-79 = B, prospektif
+0-64 = C, kurang prospektif
+
+Alasan harus menjelaskan kenapa bisnis tersebut cocok atau tidak cocok
+untuk ditawari landing page.
+
+Kembalikan HANYA array JSON sesuai schema.
 """
 
-TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
+SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "integer",
+            },
+            "nama_bisnis": {
+                "type": "string",
+            },
+            "kota": {
+                "type": "string",
+            },
+            "kategori": {
+                "type": "string",
+            },
+            "skor": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+            },
+            "alasan": {
+                "type": "string",
+            },
+            "prioritas": {
+                "type": "string",
+                "enum": ["A", "B", "C"],
+            },
+        },
+        "required": [
+            "id",
+            "nama_bisnis",
+            "kota",
+            "kategori",
+            "skor",
+            "alasan",
+            "prioritas",
+        ],
+    },
+}
 
-def extract_json(text):
-    text = text.strip()
+TRANSIENT = {
+    408,
+    429,
+    500,
+    502,
+    503,
+    504,
+}
 
-    if "```" in text:
-        text = (
-            text.replace("```json", "")
-            .replace("```", "")
-            .strip()
-        )
+def score_batch(
+    api_key: str,
+    leads: list,
+):
+    data = []
 
-    start = text.find("[")
-    end = text.rfind("]")
-
-    if start < 0 or end < 0:
-        raise ValueError(
-            "Respons Gemini tidak berisi JSON array."
-        )
-
-    return json.loads(text[start:end + 1])
-
-def score_batch(api_key, leads):
-    payload = []
-
-    for idx, lead in enumerate(leads):
-        payload.append({
-            "id": idx,
-            "username": lead.get("username", ""),
-            "instagram_url": lead.get("instagram_url", ""),
-            "title": lead.get("search_title", ""),
+    for index, lead in enumerate(leads):
+        data.append({
+            "id": index,
+            "instagram": lead.get(
+                "username",
+                "",
+            ),
+            "instagram_url": lead.get(
+                "instagram_url",
+                "",
+            ),
+            "title": lead.get(
+                "search_title",
+                "",
+            ),
             "evidence": lead.get(
-                "public_evidence", ""
-            )[:1500],
-            "query": lead.get("source_query", ""),
+                "public_evidence",
+                "",
+            )[:1600],
+            "search_query": lead.get(
+                "source_query",
+                "",
+            ),
         })
 
     prompt = (
         SYSTEM_PROMPT
         + "\n\nDATA PROSPEK:\n"
         + json.dumps(
-            payload,
-            ensure_ascii=False
+            data,
+            ensure_ascii=False,
         )
-        + "\n\nKembalikan JSON array valid."
     )
 
     body = {
         "contents": [
             {
                 "parts": [
-                    {"text": prompt}
-                ]
+                    {
+                        "text": prompt,
+                    }
+                ],
             }
         ],
         "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json",
-            "maxOutputTokens": 3000,
+            # Official Gemini 3.6 guidance: use structured output
+            # and do not send temperature/top_p/top_k.
+            "responseFormat": {
+                "text": {
+                    "mimeType": "application/json",
+                    "schema": SCHEMA,
+                }
+            },
+            "maxOutputTokens": 5000,
         },
     }
 
-    last_error = None
+    last_error = ""
 
-    # 6 attempts: 5s, 10s, 20s, 40s, 60s, 60s (+ small jitter).
     for attempt in range(6):
         try:
             r = requests.post(
                 ENDPOINT,
-                params={"key": api_key},
+                headers={
+                    "x-goog-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
                 json=body,
                 timeout=120,
             )
 
-            if r.status_code in TRANSIENT_STATUS:
+            if r.status_code in TRANSIENT:
                 last_error = (
-                    f"Gemini HTTP {r.status_code}: "
-                    f"{r.text[:500]}"
+                    f"HTTP {r.status_code}: "
+                    f"{r.text[:300]}"
                 )
 
                 if attempt < 5:
                     wait = min(
                         5 * (2 ** attempt),
-                        60
+                        60,
+                    ) + random.uniform(
+                        0,
+                        2,
                     )
-                    wait += random.uniform(0, 2)
 
                     print(
-                        f"Gemini sementara tidak tersedia "
-                        f"({r.status_code}). "
-                        f"Retry {attempt + 1}/5 dalam "
-                        f"{wait:.1f} detik..."
+                        f"Gemini temporary error "
+                        f"{r.status_code}; "
+                        f"retry {attempt + 1}/5 "
+                        f"in {wait:.1f}s"
                     )
+
                     time.sleep(wait)
                     continue
 
@@ -137,57 +208,140 @@ def score_batch(api_key, leads):
 
             r.raise_for_status()
 
-            data = r.json()
+            payload = r.json()
 
-            candidates = data.get(
+            candidates = payload.get(
                 "candidates",
-                []
+                [],
             )
 
             if not candidates:
                 raise RuntimeError(
-                    "Gemini mengembalikan 0 candidates."
+                    "Gemini tidak mengembalikan candidates."
                 )
 
             parts = candidates[0].get(
                 "content",
-                {}
-            ).get("parts", [])
+                {},
+            ).get(
+                "parts",
+                [],
+            )
 
             if not parts:
                 raise RuntimeError(
-                    "Respons Gemini tidak memiliki parts."
+                    "Gemini tidak mengembalikan parts."
                 )
 
-            text = parts[0].get("text", "")
+            text = parts[0].get(
+                "text",
+                "",
+            )
 
             if not text:
                 raise RuntimeError(
                     "Gemini mengembalikan teks kosong."
                 )
 
-            return extract_json(text)
+            result = json.loads(text)
 
-        except requests.RequestException as exc:
+            # Validate scoring before sending to Sheet.
+            if not isinstance(result, list):
+                raise ValueError(
+                    "Output Gemini bukan array."
+                )
+
+            clean = []
+
+            for item in result:
+                score = int(
+                    item.get(
+                        "skor",
+                        0,
+                    )
+                )
+
+                score = max(
+                    0,
+                    min(
+                        100,
+                        score,
+                    ),
+                )
+
+                if score >= 80:
+                    priority = "A"
+                elif score >= 65:
+                    priority = "B"
+                else:
+                    priority = "C"
+
+                clean.append({
+                    "id": int(
+                        item.get(
+                            "id",
+                            0,
+                        )
+                    ),
+                    "nama_bisnis": str(
+                        item.get(
+                            "nama_bisnis",
+                            "",
+                        )
+                    ),
+                    "kota": str(
+                        item.get(
+                            "kota",
+                            "",
+                        )
+                    ),
+                    "kategori": str(
+                        item.get(
+                            "kategori",
+                            "",
+                        )
+                    ),
+                    "skor": score,
+                    "alasan": str(
+                        item.get(
+                            "alasan",
+                            "",
+                        )
+                    ),
+                    "prioritas": priority,
+                })
+
+            return clean
+
+        except (
+            requests.RequestException,
+            ValueError,
+            KeyError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as exc:
             last_error = str(exc)
 
             if attempt < 5:
                 wait = min(
                     5 * (2 ** attempt),
-                    60
-                ) + random.uniform(0, 2)
+                    60,
+                ) + random.uniform(
+                    0,
+                    2,
+                )
 
                 print(
-                    f"Gemini request error. "
-                    f"Retry {attempt + 1}/5 dalam "
-                    f"{wait:.1f} detik..."
+                    f"Gemini retry {attempt + 1}/5 "
+                    f"in {wait:.1f}s: {last_error}"
                 )
+
                 time.sleep(wait)
                 continue
 
             break
 
     raise RuntimeError(
-        "Gemini gagal setelah 6 percobaan. "
-        f"Error terakhir: {last_error}"
+        "Gemini gagal setelah 6 percobaan: "
+        + last_error
     )
