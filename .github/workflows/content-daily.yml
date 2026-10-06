@@ -1,7 +1,6 @@
 name: Sonjaya Daily Content Planning
 
 on:
-  push:
   workflow_dispatch:
   schedule:
     - cron: "47 1 * * *"
