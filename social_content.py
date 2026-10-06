@@ -6,7 +6,7 @@ from google.genai import types
 from service_catalog import catalog_text
 
 WIB=timezone(timedelta(hours=7))
-MODEL=os.getenv("GEMINI_MODEL","gemini-2.5-flash-lite")
+MODEL=os.getenv("GEMINI_MODEL","gemini-3.5-flash-lite")
 KEY=os.environ["GEMINI_API_KEY"]
 
 def generate_week(days=7):
