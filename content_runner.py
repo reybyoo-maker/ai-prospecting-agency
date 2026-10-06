@@ -15,46 +15,51 @@ SHEET_WEBHOOK_URL=os.environ["SHEET_WEBHOOK_URL"]
 WEBHOOK_TOKEN=os.environ["WEBHOOK_TOKEN"]
 REPO=os.getenv("GITHUB_REPOSITORY","reybyoo-maker/ai-prospecting-agency")
 BRANCH=os.getenv("GITHUB_REF_NAME","main")
+TIKTOK_MEDIA_BASE_URL=os.getenv("TIKTOK_MEDIA_BASE_URL","").rstrip("/")
 
 def font(size):
-    candidates=[
+    for p in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
-    ]
-    for p in candidates:
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]:
         if Path(p).exists():
             return ImageFont.truetype(p,size)
     return ImageFont.load_default()
 
+def slugify(s):
+    return re.sub(r"[^a-z0-9]+","-",str(s).lower()).strip("-")[:42] or "post"
+
 def make_asset(post):
     date=str(post["date"])
     platform=str(post["platform"]).lower()
-    slug=re.sub(r"[^a-z0-9]+","-",post["topic"].lower())[:42].strip("-") or "post"
+    slug=slugify(post["topic"])
     filename=f"{date}-{platform}-{slug}.png"
     path=Path("social_assets")/filename
     path.parent.mkdir(parents=True,exist_ok=True)
 
     img=Image.new("RGB",(1080,1350),"white")
     d=ImageDraw.Draw(img)
-    title_font=font(56)
-    hook_font=font(80)
-    body_font=font(38)
-    cta_font=font(42)
+    d.text((80,70),"SONJAYA REMOTE BUSINESS",font=font(54),fill="black")
 
-    d.text((80,70),"SONJAYA REMOTE BUSINESS",font=title_font,fill="black")
-    d.text((80,220),"."+str(post["hook"])[:180],font=hook_font,fill="black")
-    body=post["caption"].replace("\n"," ").strip()
-    body_lines=textwrap.wrap(body,width=34)[:9]
-    y=470
-    for line in body_lines:
-        d.text((80,y),line,font=body_font,fill="black")
-        y+=58
-    d.text((80,1110),"CTA: "+str(post["cta"])[:140],font=cta_font,fill="black")
-    d.text((80,1250),"Instagram / TikTok • "+platform.upper(),font=font(28),fill="black")
+    hook=str(post["hook"]).replace("\n"," ").strip()
+    d.text((80,210),"."+hook[:180],font=font(76),fill="black")
+
+    body=str(post["caption"]).replace("\n"," ").strip()
+    lines=textwrap.wrap(body,width=34)[:9]
+    y=480
+    for line in lines:
+        d.text((80,y),line,font=font(37),fill="black")
+        y+=56
+
+    d.text((80,1110),"CTA: "+str(post["cta"])[:140],font=font(40),fill="black")
+    d.text((80,1250),platform.upper()+" • Sonjaya Remote Business Services",font=font(27),fill="black")
     img.save(path,format="PNG",optimize=True)
-    raw=f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/social_assets/{filename}"
+
     post["asset_path"]=str(path)
-    post["asset_url"]=raw
+    post["asset_url"]=f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/social_assets/{filename}"
+    post["tiktok_asset_url"]=(
+        f"{TIKTOK_MEDIA_BASE_URL}/{filename}" if TIKTOK_MEDIA_BASE_URL else ""
+    )
     return post
 
 def generate():
@@ -72,20 +77,29 @@ Layanan:
 Platform: Instagram dan TikTok.
 Hari pertama: {start.isoformat()}.
 Buat satu post per hari per platform. Konten harus edukatif, praktis, natural, soft-selling.
-Campur Reel, carousel, dan single image, tetapi asset automation hanya akan membuat single-image fallback.
-Jangan mengarang studi kasus/testimoni/angka.
+Campur Reel, carousel, dan single image, tetapi automated asset fallback memakai single image.
+Jangan mengarang studi kasus, testimoni, omzet, angka, atau hasil.
 CTA arahkan ke WhatsApp secara umum tanpa menulis nomor.
 Return JSON only.
 """
-    cfg=types.GenerateContentConfig(response_mime_type="application/json",response_json_schema=schema,max_output_tokens=7000)
+    cfg=types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_json_schema=schema,
+        max_output_tokens=7000
+    )
     r=client.models.generate_content(model=MODEL,contents=prompt,config=cfg)
     return r.parsed if getattr(r,"parsed",None) else json.loads(r.text)
 
 def push(rows):
-    r=requests.post(SHEET_WEBHOOK_URL,json={"token":WEBHOOK_TOKEN,"action":"content_ingest","rows":rows},timeout=90)
+    r=requests.post(
+        SHEET_WEBHOOK_URL,
+        json={"token":WEBHOOK_TOKEN,"action":"content_ingest","rows":rows},
+        timeout=90
+    )
     r.raise_for_status()
     data=r.json()
-    if not data.get("ok"): raise RuntimeError(data.get("error","content ingest failed"))
+    if not data.get("ok"):
+        raise RuntimeError(data.get("error","content ingest failed"))
     return data
 
 data=generate()
@@ -93,6 +107,9 @@ posts=data["posts"] if isinstance(data,dict) else []
 for p in posts:
     make_asset(p)
 
-Path("social_publish_payload.json").write_text(json.dumps(posts,ensure_ascii=False,indent=2),encoding="utf-8")
+Path("social_publish_payload.json").write_text(
+    json.dumps(posts,ensure_ascii=False,indent=2),
+    encoding="utf-8"
+)
 print(push(posts))
-print("ASSETS",len([p for p in posts if p.get("asset_url")]))
+print("ASSETS",len(posts))
