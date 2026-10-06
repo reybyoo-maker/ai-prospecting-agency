@@ -24,7 +24,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
           WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
-          GEMINI_MODEL: "gemini-2.5-flash-lite"
+          GEMINI_MODEL: "gemini-3.5-flash-lite"
           MAX_PER_RUN: "60"
           MAX_AI_PER_RUN: "40"
           SEND_LIMIT: "20"
