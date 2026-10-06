@@ -1,7 +1,6 @@
 name: Sonjaya 24x7 AI Sales Engine
 
 on:
-  push:
   workflow_dispatch:
   schedule:
     - cron: "17 */2 * * *"
@@ -29,4 +28,7 @@ jobs:
           MAX_PER_RUN: "60"
           MAX_AI_PER_RUN: "40"
           SEND_LIMIT: "20"
+          SEARCH_BACKENDS: "google,brave,bing,duckduckgo"
+          QUERIES_PER_RUN: "24"
+          SEARCH_TIMEOUT: "25"
         run: python prospecting_engine.py
