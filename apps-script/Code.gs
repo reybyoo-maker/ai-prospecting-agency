@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.4";
+const CODE_VERSION = "2026-10-07.5";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -925,21 +925,31 @@ function publishInstagramPhoto_(imageUrl,caption){
 }
 
 function refreshTikTok_(){
-  const key=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_KEY")||"";
-  const secret=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_SECRET")||"";
+  const clientId=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_ID")||"";
+  const clientSecret=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_SECRET")||"";
   const refresh=PropertiesService.getScriptProperties().getProperty("TIKTOK_REFRESH_TOKEN")||"";
-  if(!key||!secret||!refresh)throw new Error("TIKTOK_REFRESH_NOT_CONFIGURED");
-  const res=UrlFetchApp.fetch("https://open.tiktokapis.com/v2/oauth/token/",{
-    method:"post",contentType:"application/x-www-form-urlencoded",
-    payload:{client_key:key,client_secret:secret,grant_type:"refresh_token",refresh_token:refresh},
+  if(!clientId||!clientSecret||!refresh)throw new Error("TIKTOK_REFRESH_NOT_CONFIGURED");
+  const res=UrlFetchApp.fetch("https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2/refresh_token/",{
+    method:"post",
+    contentType:"application/json",
+    payload:JSON.stringify({
+      grant_type:"refresh_token",
+      refresh_token:refresh,
+      client_id:clientId,
+      client_secret:clientSecret
+    }),
     muteHttpExceptions:true
   });
-  const code=res.getResponseCode(),txt=res.getContentText();let data={};
-  try{data=JSON.parse(txt||"{}");}catch(e){}
-  if(code<200||code>=300||!data.access_token)throw new Error("TikTok refresh HTTP "+code+": "+txt.slice(0,500));
-  PropertiesService.getScriptProperties().setProperty("TIKTOK_ACCESS_TOKEN",data.access_token);
-  if(data.refresh_token)PropertiesService.getScriptProperties().setProperty("TIKTOK_REFRESH_TOKEN",data.refresh_token);
-  return data.access_token;
+  const code=res.getResponseCode(),txt=res.getContentText();
+  let data={}; try{data=JSON.parse(txt||"{}");}catch(e){}
+  if(code<200||code>=300||!data.data||!data.data.access_token){
+    throw new Error("TikTok refresh HTTP "+code+": "+txt.slice(0,700));
+  }
+  const d=data.data;
+  PropertiesService.getScriptProperties().setProperty("TIKTOK_ACCESS_TOKEN",d.access_token);
+  if(d.refresh_token)PropertiesService.getScriptProperties().setProperty("TIKTOK_REFRESH_TOKEN",d.refresh_token);
+  if(d.open_id)PropertiesService.getScriptProperties().setProperty("TIKTOK_BUSINESS_ID",d.open_id);
+  return d.access_token;
 }
 
 function publishTikTokPhoto_(imageUrl,caption){
