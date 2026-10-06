@@ -1,0 +1,22 @@
+name: Validate Sonjaya Agency
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python syntax
+        run: |
+          python -m py_compile             prospecting_engine.py             service_catalog.py             social_content.py             content_runner.py             social_dispatch.py             main.py             prospector.py             gemini_scorer.py             email_sender.py
+      - name: Apps Script JavaScript syntax
+        run: node --check apps-script/Code.gs
