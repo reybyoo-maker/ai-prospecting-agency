@@ -11,6 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
+const CODE_VERSION = "2026-10-07.1";
 
 const HEADERS = [
   "Lead ID","Tanggal ditemukan","Nama bisnis","Email","Sumber email","Website","Social",
@@ -29,7 +30,29 @@ function sheet_(){
   sh.getRange(1,1,1,HEADERS.length).setFontWeight("bold");
   sh.getDataRange().setWrap(true);
   configureProspectControls_(sh);
+  backfillProspectControls_(sh);
   return sh;
+}
+
+function backfillProspectControls_(sh){
+  const last=sh.getLastRow();
+  if(last<2)return;
+  const n=last-1, manualCol=col_("Manual Send"), resultCol=col_(SEND_RESULT_COL), statusCol=col_("Status");
+  const statuses=sh.getRange(2,statusCol,n,1).getValues();
+  const manual=sh.getRange(2,manualCol,n,1).getValues();
+  const results=sh.getRange(2,resultCol,n,1).getValues();
+  const handled=["SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF","OPTOUT"];
+  let manualChanged=false,resultChanged=false;
+  for(let i=0;i<n;i++){
+    if(manual[i][0]==="" || manual[i][0]===null){manual[i][0]=false;manualChanged=true;}
+    if(results[i][0]==="" || results[i][0]===null){
+      const st=String(statuses[i][0]||"").toUpperCase().trim();
+      results[i][0]=handled.indexOf(st)>=0 ? "LEGACY_EXISTING_STATE" : "WAITING_FOR_MANUAL_SEND";
+      resultChanged=true;
+    }
+  }
+  if(manualChanged)sh.getRange(2,manualCol,n,1).setValues(manual);
+  if(resultChanged)sh.getRange(2,resultCol,n,1).setValues(results);
 }
 
 function ensureHeaders_(sh, headers){
@@ -290,12 +313,43 @@ function doGet(e){
   return json_({ok:true,service:"Sonjaya Remote Agency",status:"running"});
 }
 
+function liveHealth_(){
+  const props=PropertiesService.getScriptProperties();
+  const triggers=ScriptApp.getProjectTriggers();
+  const handlers=triggers.map(t=>t.getHandlerFunction());
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  const names=ss.getSheets().map(s=>s.getName());
+  return json_({
+    ok:true,
+    service:"Sonjaya Remote Agency",
+    version:CODE_VERSION,
+    sheets:{
+      prospects:names.indexOf(SHEET_NAME)>=0,
+      content_planning:names.indexOf(CONTENT_PLAN_SHEET)>=0,
+      social_leads:names.indexOf(SOCIAL_LEADS_SHEET)>=0
+    },
+    properties:{
+      webhook_token:Boolean(props.getProperty("WEBHOOK_TOKEN")),
+      wa_number:Boolean(props.getProperty("WA_NUMBER")),
+      meta_verify_token:Boolean(props.getProperty("META_VERIFY_TOKEN")),
+      ig_user_id:Boolean(props.getProperty("IG_USER_ID")),
+      ig_access_token:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
+      ig_comment_keyword:Boolean(props.getProperty("IG_COMMENT_KEYWORD"))
+    },
+    triggers:{
+      hourlyAutomation:handlers.indexOf("hourlyAutomation_")>=0,
+      manualSendOnEdit:handlers.indexOf("manualSendOnEdit_")>=0
+    }
+  });
+}
+
 function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
     if(body && body.object==="instagram")return handleInstagramWebhook_(body);
     if(!auth_(body))return json_({ok:false,error:"Unauthorized"});
     const a=body.action||"ingest";
+    if(a==="healthcheck")return liveHealth_();
     if(a==="ingest")return ingest_(body.rows||[]);
     if(a==="send_queue")return sendQueue_(Number(body.limit||DAILY_SEND_LIMIT));
     if(a==="scan_replies")return scanReplies_(Number(body.limit||20));
@@ -675,6 +729,10 @@ function markContentPublished_(date,platform,result){
 
 function setup(){
   sheet_();contentSheet_();contentPlanningSheet_();socialLeadsSheet_();
+  const props=PropertiesService.getScriptProperties();
+  if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("IG_API_VERSION"))props.setProperty("IG_API_VERSION","v26.0");
+  if(!props.getProperty("IG_MESSAGING_HOST"))props.setProperty("IG_MESSAGING_HOST","https://graph.instagram.com");
   const triggers=ScriptApp.getProjectTriggers();
   if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
     ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
@@ -683,7 +741,12 @@ function setup(){
   if(!triggers.some(t=>t.getHandlerFunction()==="manualSendOnEdit_")){
     ScriptApp.newTrigger("manualSendOnEdit_").forSpreadsheet(spreadsheetId).onEdit().create();
   }
-  return "Sonjaya system ready";
+  backfillProspectControls_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME));
+  return "Sonjaya system ready | version "+CODE_VERSION;
+}
+
+function systemStatus(){
+  return liveHealth_();
 }
 
 function hourlyAutomation_(){
