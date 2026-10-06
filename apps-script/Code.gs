@@ -2,35 +2,52 @@ const SHEET_NAME = "Prospects";
 const CONTENT_SHEET = "Content";
 const MAX_ATTEMPTS = 3;
 const DAILY_SEND_LIMIT = 20;
+const MAX_FOLLOWUPS_PER_RUN = 5;
 const AGENCY_NAME = "Sonjaya Remote Business Services";
 
 const HEADERS = [
   "Lead ID","Tanggal ditemukan","Nama bisnis","Email","Sumber email","Website","Social",
   "Kota","Kategori","Bukti publik","Skor","Prioritas","Kebutuhan terdeteksi",
   "Layanan direkomendasikan","Pain point","Hook personal","Subject","Body","Status",
-  "Sent At","Reply At","Reply Intent","Last Reply","WhatsApp Handoff","Attempts",
-  "Last Error","Opt Out","Catatan"
+  "Sent At","Follow-up 1 At","Follow-up 2 At","Follow-up 3 At","Reply At","Reply Intent",
+  "Last Reply","WhatsApp Handoff","Attempts","Last Error","Opt Out","Catatan"
 ];
 
 function sheet_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
   let sh=ss.getSheetByName(SHEET_NAME);
   if(!sh) sh=ss.insertSheet(SHEET_NAME);
-  if(sh.getLastRow()===0) sh.getRange(1,1,1,HEADERS.length).setValues([HEADERS]);
+  ensureHeaders_(sh,HEADERS);
   sh.setFrozenRows(1);
   sh.getRange(1,1,1,HEADERS.length).setFontWeight("bold");
   sh.getDataRange().setWrap(true);
   return sh;
 }
+
+function ensureHeaders_(sh, headers){
+  if(sh.getLastColumn()===0 || sh.getLastRow()===0){
+    sh.getRange(1,1,1,headers.length).setValues([headers]);
+    return;
+  }
+  const current=sh.getRange(1,1,1,Math.max(1,sh.getLastColumn())).getValues()[0].map(String);
+  headers.forEach(function(h){
+    if(current.indexOf(h)===-1){
+      sh.getRange(1,sh.getLastColumn()+1).setValue(h).setFontWeight("bold");
+    }
+  });
+}
+
 function contentSheet_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
   let sh=ss.getSheetByName(CONTENT_SHEET);
   if(!sh) sh=ss.insertSheet(CONTENT_SHEET);
-  const h=["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Status"];
-  if(sh.getLastRow()===0) sh.getRange(1,1,1,h.length).setValues([h]);
-  sh.setFrozenRows(1); sh.getRange(1,1,1,h.length).setFontWeight("bold");
+  const h=["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
+  ensureHeaders_(sh,h);
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,h.length).setFontWeight("bold");
   return sh;
 }
+
 function col_(name){return HEADERS.indexOf(name)+1;}
 function now_(){return new Date();}
 function json_(o){return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);}
@@ -39,24 +56,35 @@ function auth_(body){
   return Boolean(expected&&body&&body.token===expected);
 }
 function ownerEmail_(){return String(Session.getEffectiveUser().getEmail()||"").toLowerCase();}
+
 function waLink_(business,email){
-  const number=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/D/g,"");
-  if(!number) return "";
+  const number=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\D/g,"");
+  if(!number)return "";
   const text="Halo Rey, saya dari "+business+". Saya membalas email tentang kebutuhan bisnis kami. Email: "+email;
   return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
 }
-function doGet(){return json_({ok:true,service:"Sonjaya Remote Agency",status:"running"});}
+
+function doGet(e){
+  const p=(e&&e.parameter)||{};
+  const verify=PropertiesService.getScriptProperties().getProperty("META_VERIFY_TOKEN")||"";
+  if(p["hub.mode"]==="subscribe" && p["hub.verify_token"]===verify && p["hub.challenge"]){
+    return ContentService.createTextOutput(p["hub.challenge"]);
+  }
+  return json_({ok:true,service:"Sonjaya Remote Agency",status:"running"});
+}
 
 function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
-    if(!auth_(body)) return json_({ok:false,error:"Unauthorized"});
+    if(!auth_(body))return json_({ok:false,error:"Unauthorized"});
     const a=body.action||"ingest";
-    if(a==="ingest") return ingest_(body.rows||[]);
-    if(a==="send_queue") return sendQueue_(Number(body.limit||DAILY_SEND_LIMIT));
-    if(a==="scan_replies") return scanReplies_(Number(body.limit||20));
-    if(a==="mark_error") return markError_(String(body.id||""),String(body.error||""));
-    if(a==="content_ingest") return ingestContent_(body.rows||[]);
+    if(a==="ingest")return ingest_(body.rows||[]);
+    if(a==="send_queue")return sendQueue_(Number(body.limit||DAILY_SEND_LIMIT));
+    if(a==="scan_replies")return scanReplies_(Number(body.limit||20));
+    if(a==="process_followups")return processFollowups_(Number(body.limit||MAX_FOLLOWUPS_PER_RUN));
+    if(a==="mark_error")return markError_(String(body.id||""),String(body.error||""));
+    if(a==="content_ingest")return ingestContent_(body.rows||[]);
+    if(a==="publish_social")return publishSocial_(body);
     return json_({ok:false,error:"Unknown action"});
   }catch(err){return json_({ok:false,error:String(err)});}
 }
@@ -65,7 +93,7 @@ function ingest_(rows){
   const sh=sheet_(), existing={};
   if(sh.getLastRow()>=2){
     sh.getRange(2,col_("Email"),sh.getLastRow()-1,1).getValues().forEach(function(r){
-      const e=String(r[0]||"").toLowerCase().trim(); if(e) existing[e]=true;
+      const e=String(r[0]||"").toLowerCase().trim(); if(e)existing[e]=true;
     });
   }
   let added=0,duplicates=0,noEmail=0;
@@ -74,7 +102,7 @@ function ingest_(rows){
     if(!email||email.indexOf("@")===-1){noEmail++;return;}
     if(existing[email]){duplicates++;return;}
     const o=new Array(HEADERS.length).fill("");
-    const set=(h,v)=>o[col_(h)-1]=v==null?"":v;
+    const set=(h,v)=>{const c=col_(h);if(c>0)o[c-1]=v==null?"":v;};
     const score=Number(row.skor||0);
     set("Lead ID",row.lead_id||Utilities.getUuid().replace(/-/g,"").slice(0,12));
     set("Tanggal ditemukan",row.tanggal_ditemukan||Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
@@ -82,8 +110,9 @@ function ingest_(rows){
     set("Website",row.website_url); set("Social",row.social_url); set("Kota",row.kota); set("Kategori",row.kategori);
     set("Bukti publik",row.bukti_publik); set("Skor",score); set("Prioritas",score>=85?"A":score>=75?"B":"C");
     set("Kebutuhan terdeteksi",row.detected_need); set("Layanan direkomendasikan",row.recommended_service);
-    set("Pain point",row.pain_point); set("Hook personal",row.alasan); set("Subject",row.subject); set("Body",row.body);
-    set("Status",row.status||"REVIEW"); set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
+    set("Pain point",row.pain_point); set("Hook personal",row.alasan);
+    set("Subject",row.subject); set("Body",row.body); set("Status",row.status||"REVIEW");
+    set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
     sh.appendRow(o); existing[email]=true; added++;
   });
   return json_({ok:true,received:rows.length,added:added,duplicates:duplicates,no_email:noEmail});
@@ -92,32 +121,46 @@ function ingest_(rows){
 function findRowById_(id){
   const sh=sheet_(); if(sh.getLastRow()<2)return -1;
   const v=sh.getRange(2,col_("Lead ID"),sh.getLastRow()-1,1).getValues();
-  for(let i=0;i<v.length;i++) if(String(v[i][0]||"")===id)return i+2;
+  for(let i=0;i<v.length;i++)if(String(v[i][0]||"")===id)return i+2;
   return -1;
 }
+
 function markError_(id,error){
   if(!id)return json_({ok:false,error:"Missing id"});
-  const sh=sheet_(), row=findRowById_(id);
+  const sh=sheet_(),row=findRowById_(id);
   if(row<2)return json_({ok:false,error:"Lead ID not found"});
-  const c=sh.getRange(row,col_("Attempts")), n=Number(c.getValue()||0)+1;
-  c.setValue(n); sh.getRange(row,col_("Status")).setValue(n>=MAX_ATTEMPTS?"FAILED":"ERROR");
+  const c=sh.getRange(row,col_("Attempts")),n=Number(c.getValue()||0)+1;
+  c.setValue(n);
+  sh.getRange(row,col_("Status")).setValue(n>=MAX_ATTEMPTS?"FAILED":"ERROR");
   sh.getRange(row,col_("Last Error")).setValue(String(error||"Unknown error").slice(0,1000));
   return json_({ok:true,id:id,attempts:n});
 }
 
+function outboundToday_(values,idx){
+  const today=Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd");
+  let n=0;
+  values.forEach(function(r){
+    ["Sent At","Follow-up 1 At","Follow-up 2 At","Follow-up 3 At"].forEach(function(h){
+      const v=String(r[idx[h]]||"");
+      if(v.indexOf(today)===0)n++;
+    });
+  });
+  return n;
+}
+
 function sendQueue_(limit){
-  const sh=sheet_(), last=sh.getLastRow();
+  const sh=sheet_(),last=sh.getLastRow();
   if(last<2)return json_({ok:true,sent_today:0,sent:0,remaining:0,gmail_quota:MailApp.getRemainingDailyQuota()});
   limit=Math.max(1,Math.min(limit||DAILY_SEND_LIMIT,DAILY_SEND_LIMIT));
   const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
   const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
-  const today=Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd");
-  let sentToday=0; const q=[];
+  const sentToday=outboundToday_(values,idx);
+  const q=[];
   values.forEach(function(r){
-    const sentAt=String(r[idx["Sent At"]]||""); if(sentAt.indexOf(today)===0)sentToday++;
-    const status=String(r[idx["Status"]]||"").toUpperCase().trim(), opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
+    const status=String(r[idx["Status"]]||"").toUpperCase().trim();
+    const opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
     if(status!=="READY"||opt==="YES")return;
-    const email=String(r[idx["Email"]]||"").trim(), subject=String(r[idx["Subject"]]||"").trim(), body=String(r[idx["Body"]]||"").trim();
+    const email=String(r[idx["Email"]]||"").trim(),subject=String(r[idx["Subject"]]||"").trim(),body=String(r[idx["Body"]]||"").trim();
     const attempts=Number(r[idx["Attempts"]]||0);
     if(!email||!subject||!body||attempts>=MAX_ATTEMPTS)return;
     q.push({leadId:String(r[idx["Lead ID"]]||""),email,subject,body,score:Number(r[idx["Skor"]]||0)});
@@ -128,36 +171,120 @@ function sendQueue_(limit){
   let sent=0;
   selected.forEach(function(x){
     try{
-      MailApp.sendEmail({to:x.email,subject:x.subject,body:x.body,name:AGENCY_NAME});
+      MailApp.sendEmail({to:x.email,subject:x.subject,body:x.body,name:AGENCY_NAME,replyTo:ownerEmail_()});
       const row=findRowById_(x.leadId);
-      if(row>1){sh.getRange(row,col_("Status")).setValue("SENT");sh.getRange(row,col_("Sent At")).setValue(now_());sh.getRange(row,col_("Last Error")).clearContent();}
-      sent++; Utilities.sleep(1500);
+      if(row>1){
+        const first=now_();
+        sh.getRange(row,col_("Status")).setValue("SENT");
+        sh.getRange(row,col_("Sent At")).setValue(first);
+        sh.getRange(row,col_("Follow-up 1 At")).setValue(new Date(first.getTime()+2*86400000));
+        sh.getRange(row,col_("Follow-up 2 At")).setValue(new Date(first.getTime()+5*86400000));
+        sh.getRange(row,col_("Follow-up 3 At")).setValue(new Date(first.getTime()+9*86400000));
+        sh.getRange(row,col_("Last Error")).clearContent();
+      }
+      sent++;
+      Utilities.sleep(1200);
     }catch(err){markError_(x.leadId,String(err));}
   });
   return json_({ok:true,sent_today:sentToday+sent,sent:sent,remaining:Math.max(0,DAILY_SEND_LIMIT-sentToday-sent),gmail_quota:MailApp.getRemainingDailyQuota()});
 }
 
+function findThreadByLeadId_(id){
+  const threads=GmailApp.search('subject:"[SJ-'+id+']"',0,10);
+  return threads.length?threads[0]:null;
+}
+
+function sendFollowupMessage_(leadId,email,subject,body){
+  const thread=findThreadByLeadId_(leadId);
+  if(thread){
+    thread.reply(body,{name:AGENCY_NAME,replyTo:ownerEmail_()});
+    return "THREAD";
+  }
+  MailApp.sendEmail({to:email,subject:subject,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
+  return "NEW_MESSAGE";
+}
+
+function followupBody_(business,service,pain,stage){
+  const serviceText=service||"pekerjaan remote";
+  if(stage===1){
+    return "Halo tim "+business+",\n\nSaya follow up singkat soal email saya sebelumnya. Saya melihat ada peluang terkait "+serviceText+(pain?" — khususnya "+pain+".":".")+"\n\nKalau ini memang sedang dibutuhkan, saya bisa kirim contoh alur kerja yang sederhana dan bisa dikerjakan remote.\n\nSalam,\nRey\n"+AGENCY_NAME;
+  }
+  if(stage===2){
+    return "Halo tim "+business+",\n\nSaya ingin memastikan email sebelumnya tidak terlewat. Untuk "+business+", saya mengusulkan bantuan remote di area "+serviceText+". Tidak perlu komitmen panjang; kita bisa mulai dari tugas yang paling mendesak.\n\nKalau relevan, cukup balas email ini dan saya kirim detailnya.\n\nSalam,\nRey\n"+AGENCY_NAME;
+  }
+  return "Halo tim "+business+",\n\nIni follow up terakhir saya terkait bantuan remote "+serviceText+". Saya tidak akan mengirim follow up lagi setelah ini. Kalau kebutuhan tersebut muncul di kemudian hari, cukup balas email ini.\n\nTerima kasih,\nRey\n"+AGENCY_NAME;
+}
+
+function processFollowups_(limit){
+  const sh=sheet_(),last=sh.getLastRow();
+  if(last<2)return json_({ok:true,processed:0});
+  const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
+  const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
+  const sentToday=outboundToday_(values,idx);
+  let remaining=Math.max(0,Math.min(MailApp.getRemainingDailyQuota(),DAILY_SEND_LIMIT-sentToday));
+  const now=now_(); let processed=0;
+  const maxItems=Math.min(Math.max(1,limit||MAX_FOLLOWUPS_PER_RUN),remaining);
+  for(let i=0;i<values.length&&processed<maxItems;i++){
+    const r=values[i];
+    const status=String(r[idx["Status"]]||"").toUpperCase().trim();
+    const opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
+    if(opt==="YES"||["READY","REPLIED","WA_HANDOFF","OPTOUT","ERROR","FAILED","FOLLOWUP_DONE"].indexOf(status)>=0)continue;
+
+    let stage=0,due=null,nextStatus="",timeCol="";
+    if(status==="SENT"){stage=1;due=r[idx["Follow-up 1 At"]];nextStatus="FOLLOWUP_1";timeCol="Follow-up 1 At";}
+    else if(status==="FOLLOWUP_1"){stage=2;due=r[idx["Follow-up 2 At"]];nextStatus="FOLLOWUP_2";timeCol="Follow-up 2 At";}
+    else if(status==="FOLLOWUP_2"){stage=3;due=r[idx["Follow-up 3 At"]];nextStatus="FOLLOWUP_3";timeCol="Follow-up 3 At";}
+    else continue;
+
+    if(!(due instanceof Date)){due=new Date(String(due||""));} 
+    if(isNaN(due.getTime())||due.getTime()>now.getTime())continue;
+
+    const leadId=String(r[idx["Lead ID"]]||""),email=String(r[idx["Email"]]||"").trim(),subject=String(r[idx["Subject"]]||"").trim();
+    if(!leadId||!email||!subject)continue;
+    const business=String(r[idx["Nama bisnis"]]||"Perusahaan");
+    const service=String(r[idx["Layanan direkomendasikan"]]||"pekerjaan remote");
+    const pain=String(r[idx["Pain point"]]||"");
+    const body=followupBody_(business,service,pain,stage);
+    try{
+      sendFollowupMessage_(leadId,email,subject,body);
+      const rowNum=i+2;
+      sh.getRange(rowNum,col_("Status")).setValue(stage===3?"FOLLOWUP_DONE":nextStatus);
+      sh.getRange(rowNum,col_(timeCol)).setValue(now);
+      sh.getRange(rowNum,col_("Last Error")).clearContent();
+      processed++; remaining--;
+    }catch(err){
+      markError_(leadId,String(err));
+    }
+  }
+  return json_({ok:true,processed:processed,sent_today:sentToday+processed,remaining:remaining});
+}
+
 function scanReplies_(limit){
-  const sh=sheet_(), last=sh.getLastRow();
+  const sh=sheet_(),last=sh.getLastRow();
   if(last<2)return json_({ok:true,replied:0});
-  const threads=GmailApp.search("in:inbox newer_than:3d -from:me",0,50);
-  const owner=ownerEmail_(); let replied=0;
+  const threads=GmailApp.search("in:inbox newer_than:7d -from:me",0,100);
+  const owner=ownerEmail_();let replied=0;
   for(let ti=0;ti<threads.length&&replied<limit;ti++){
-    const thread=threads[ti], subject=String(thread.getFirstMessageSubject()||"");
-    const m=subject.match(/[SJ-([a-f0-9]{12})]/i); if(!m)continue;
+    const thread=threads[ti],subject=String(thread.getFirstMessageSubject()||"");
+    const m=subject.match(/\[SJ-([a-f0-9]{12})\]/i); if(!m)continue;
     const row=findRowById_(m[1]); if(row<2)continue;
     const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
-    if(status==="WA_HANDOFF"||status==="OPTOUT")continue;
-    const msgs=thread.getMessages(); let inbound=null;
+    if(["WA_HANDOFF","OPTOUT"].indexOf(status)>=0)continue;
+
+    const msgs=thread.getMessages();let inbound=null;
     for(let i=msgs.length-1;i>=0;i--){
       const from=String(msgs[i].getFrom()||"").toLowerCase();
       if(owner && from.indexOf(owner)===-1){inbound=msgs[i];break;}
     }
     if(!inbound)continue;
-    const body=String(inbound.getPlainBody()||"").slice(0,5000), upper=body.toUpperCase();
+
+    const body=String(inbound.getPlainBody()||"").slice(0,5000),upper=body.toUpperCase();
     if(upper.indexOf("UNSUBSCRIBE")!==-1){
-      sh.getRange(row,col_("Status")).setValue("OPTOUT");sh.getRange(row,col_("Opt Out")).setValue("YES");continue;
+      sh.getRange(row,col_("Status")).setValue("OPTOUT");
+      sh.getRange(row,col_("Opt Out")).setValue("YES");
+      continue;
     }
+
     const business=String(sh.getRange(row,col_("Nama bisnis")).getValue()||"Perusahaan");
     const email=String(sh.getRange(row,col_("Email")).getValue()||"");
     const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\b/i.test(body)?"INTERESTED":"REPLIED";
@@ -165,34 +292,140 @@ function scanReplies_(limit){
     const replyText=wa
       ? "Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\n\nWhatsApp: "+wa+"\n\nSalam,\nRey\n"+AGENCY_NAME
       : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\n\nSalam,\nRey\n"+AGENCY_NAME;
-    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
+    try{thread.reply(replyText,{name:AGENCY_NAME,replyTo:ownerEmail_()});}catch(e){continue;}
     sh.getRange(row,col_("Status")).setValue(wa?"WA_HANDOFF":"REPLIED");
-    sh.getRange(row,col_("Reply At")).setValue(now_()); sh.getRange(row,col_("Reply Intent")).setValue(intent);
-    sh.getRange(row,col_("Last Reply")).setValue(body.slice(0,1500)); sh.getRange(row,col_("WhatsApp Handoff")).setValue(wa);
+    sh.getRange(row,col_("Reply At")).setValue(now_());
+    sh.getRange(row,col_("Reply Intent")).setValue(intent);
+    sh.getRange(row,col_("Last Reply")).setValue(body.slice(0,1500));
+    sh.getRange(row,col_("WhatsApp Handoff")).setValue(wa);
     replied++;
   }
   return json_({ok:true,replied:replied});
 }
 
 function ingestContent_(rows){
-  const sh=contentSheet_(); const existing={};
-  if(sh.getLastRow()>=2) sh.getRange(2,1,sh.getLastRow()-1,3).getValues().forEach(function(r){existing[String(r[0])+"|"+String(r[1])+"|"+String(r[3])] = true;});
+  const sh=contentSheet_(), existing={};
+  if(sh.getLastRow()>=2){
+    const all=sh.getRange(2,1,sh.getLastRow()-1,Math.min(sh.getLastColumn(),4)).getValues();
+    all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])+"|"+String(r[3])]=true;});
+  }
   let added=0;
   rows.forEach(function(r){
     const key=String(r.date)+"|"+String(r.platform)+"|"+String(r.topic);
     if(existing[key])return;
-    sh.appendRow([r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,r.status||"PLANNED"]);
-    existing[key]=true; added++;
+    sh.appendRow([r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,r.asset_url||"",r.status||"PLANNED",""]);
+    existing[key]=true;added++;
   });
   return json_({ok:true,added:added});
 }
 
+function urlFetchJson_(url,options){
+  const res=UrlFetchApp.fetch(url,options||{muteHttpExceptions:true});
+  const code=res.getResponseCode(),txt=res.getContentText();
+  let data={};
+  try{data=JSON.parse(txt||"{}");}catch(e){data={raw:txt};}
+  if(code<200||code>=300)throw new Error("HTTP "+code+": "+txt.slice(0,1000));
+  return data;
+}
+
+function publishInstagramPhoto_(imageUrl,caption){
+  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
+  const userId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
+  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
+  if(!token||!userId)return {ok:false,error:"INSTAGRAM_NOT_CONFIGURED"};
+  const base="https://graph.facebook.com/"+version+"/"+encodeURIComponent(userId);
+  const container=urlFetchJson_(base+"/media?image_url="+encodeURIComponent(imageUrl)+"&caption="+encodeURIComponent(caption||"")+"&access_token="+encodeURIComponent(token),{method:"post",muteHttpExceptions:true});
+  const creationId=container.id;
+  if(!creationId)return {ok:false,error:"Instagram container not created"};
+  Utilities.sleep(5000);
+  const published=urlFetchJson_(base+"/media_publish?creation_id="+encodeURIComponent(creationId)+"&access_token="+encodeURIComponent(token),{method:"post",muteHttpExceptions:true});
+  return {ok:true,platform:"instagram",id:published.id||creationId};
+}
+
+function refreshTikTok_(){
+  const key=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_KEY")||"";
+  const secret=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_SECRET")||"";
+  const refresh=PropertiesService.getScriptProperties().getProperty("TIKTOK_REFRESH_TOKEN")||"";
+  if(!key||!secret||!refresh)throw new Error("TIKTOK_REFRESH_NOT_CONFIGURED");
+  const res=UrlFetchApp.fetch("https://open.tiktokapis.com/v2/oauth/token/",{
+    method:"post",contentType:"application/x-www-form-urlencoded",
+    payload:{client_key:key,client_secret:secret,grant_type:"refresh_token",refresh_token:refresh},
+    muteHttpExceptions:true
+  });
+  const code=res.getResponseCode(),txt=res.getContentText();let data={};
+  try{data=JSON.parse(txt||"{}");}catch(e){}
+  if(code<200||code>=300||!data.access_token)throw new Error("TikTok refresh HTTP "+code+": "+txt.slice(0,500));
+  PropertiesService.getScriptProperties().setProperty("TIKTOK_ACCESS_TOKEN",data.access_token);
+  if(data.refresh_token)PropertiesService.getScriptProperties().setProperty("TIKTOK_REFRESH_TOKEN",data.refresh_token);
+  return data.access_token;
+}
+
+function publishTikTokPhoto_(imageUrl,caption){
+  let token=PropertiesService.getScriptProperties().getProperty("TIKTOK_ACCESS_TOKEN")||"";
+  if(!token){
+    try{token=refreshTikTok_();}catch(e){return {ok:false,error:String(e)};}
+  }
+  const initPayload={
+    post_info:{
+      description:String(caption||"").slice(0,2200),
+      privacy_level:"PUBLIC_TO_EVERYONE",
+      auto_add_music:false,
+      brand_organic_toggle:true,
+      is_aigc:true
+    },
+    source_info:{source:"PULL_FROM_URL",photo_images:[imageUrl],photo_cover_index:0},
+    post_mode:"DIRECT_POST",
+    media_type:"PHOTO"
+  };
+  let result=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/content/init/",{
+    method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
+    payload:JSON.stringify(initPayload),muteHttpExceptions:true
+  });
+  if(result.error && result.error.code && result.error.code!=="ok"){
+    token=refreshTikTok_();
+    result=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/content/init/",{
+      method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
+      payload:JSON.stringify(initPayload),muteHttpExceptions:true
+    });
+  }
+  if(result.error && result.error.code && result.error.code!=="ok")return {ok:false,error:JSON.stringify(result.error)};
+  return {ok:true,platform:"tiktok",publish_id:result.data&&result.data.publish_id?result.data.publish_id:""};
+}
+
+function publishSocial_(body){
+  const platform=String(body.platform||"").toLowerCase();
+  const imageUrl=String(body.image_url||"").trim();
+  const caption=String(body.caption||"").trim();
+  if(!imageUrl)return json_({ok:false,error:"Missing image_url"});
+  let result;
+  if(platform==="instagram")result=publishInstagramPhoto_(imageUrl,caption);
+  else if(platform==="tiktok")result=publishTikTokPhoto_(imageUrl,caption);
+  else return json_({ok:false,error:"Unsupported platform"});
+  return json_(result);
+}
+
+function markContentPublished_(date,platform,result){
+  const sh=contentSheet_(),last=sh.getLastRow();
+  if(last<2)return;
+  const vals=sh.getRange(2,1,last-1,11).getValues();
+  for(let i=0;i<vals.length;i++){
+    if(String(vals[i][0])===String(date)&&String(vals[i][1]).toLowerCase()===String(platform).toLowerCase()){
+      sh.getRange(i+2,10).setValue(result.ok?"PUBLISHED":"PUBLISH_ERROR");
+      sh.getRange(i+2,11).setValue(JSON.stringify(result));
+    }
+  }
+}
+
 function setup(){
-  sheet_(); contentSheet_();
+  sheet_();contentSheet_();
   const triggers=ScriptApp.getProjectTriggers();
-  if(!triggers.some(t=>t.getHandlerFunction()==="hourlyReplyMonitor_")){
-    ScriptApp.newTrigger("hourlyReplyMonitor_").timeBased().everyHours(1).create();
+  if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
+    ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
   }
   return "Sonjaya system ready";
 }
-function hourlyReplyMonitor_(){scanReplies_(20);}
+
+function hourlyAutomation_(){
+  try{scanReplies_(20);}catch(e){console.log(e);}
+  try{processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){console.log(e);}
+}
