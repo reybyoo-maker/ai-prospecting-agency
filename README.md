@@ -1,65 +1,64 @@
-# Sonjaya AI Sales Engine
+# Sonjaya AI Remote Agency
 
-Satu mesin otomatis untuk mencari calon klien bisnis Indonesia, wajib menemukan email publik, menganalisis kecocokan dengan AI, membuat email personal, lalu mengirim outreach secara otomatis setiap hari.
+Mesin utama sekarang adalah V2: discovery bisnis -> email publik -> AI membaca kebutuhan -> pilih satu layanan paling relevan -> personalisasi email -> Google Sheets -> Gmail otomatis -> monitor reply -> handoff WhatsApp.
 
-Model bisnis dikunci:
-AI Lead Generation + Appointment Setting.
+## V2 tanpa TinyFish dan tanpa SMTP
 
-Alur:
-Discovery -> Email Finder -> AI Scoring -> Personalized Email -> Google Sheets -> Gmail Sender.
+Discovery V2 menggunakan DDGS + halaman web publik, jadi tidak membutuhkan API TinyFish. Gemini API dipakai untuk research/scoring/copy. Pengiriman Gmail dan pembacaan reply dilakukan oleh Google Apps Script menggunakan akun Google yang mengotorisasi script.
 
-Aturan inti:
-1. Prospect tanpa email publik dibuang dan tidak pernah masuk antrean kirim.
-2. Email hanya diambil dari informasi publik pada hasil pencarian atau halaman web yang dapat diakses umum.
-3. AI tidak boleh mengarang fakta bisnis.
-4. Hanya skor >= 75 yang berstatus READY dan dapat dikirim otomatis.
-5. Daily send limit default 20 email/hari.
-6. Ada jeda acak 20-45 detik antar email.
-7. Email menyertakan instruksi opt-out: balas UNSUBSCRIBE.
-8. Jangan memakai daftar email curian, data pribadi sensitif, atau alamat yang diperoleh dari akses login.
+Gemini menyediakan Free Tier untuk model yang memenuhi syarat, tetapi tetap memiliki quota/rate limit. Gmail juga mempunyai batas pengiriman harian dan batas penggunaan; V2 sengaja memakai default 20 email/hari. Referensi: Google Gemini pricing dan Gmail usage limits.
 
-Komponen:
-- TinyFish: web/business discovery.
-- Gemini: scoring dan analisis prospek.
-- Google Apps Script + Google Sheets: database dan send queue.
-- Gmail SMTP: pengiriman email.
-- GitHub Actions: scheduler 4 kali sehari.
+## Yang dilakukan otomatis
 
-Google Sheet:
-Buat spreadsheet lalu buka Extensions -> Apps Script.
-Salin isi apps-script/Code.gs.
-Set Script Property:
-WEBHOOK_TOKEN = token acak yang sama dengan GitHub Secret WEBHOOK_TOKEN.
-Deploy sebagai Web app:
-Execute as: Me.
-Who has access: Anyone.
-Salin URL Web App ke GitHub Secret SHEET_WEBHOOK_URL.
-Jalankan fungsi setup sekali dari Apps Script.
+Setiap 2 jam GitHub Actions:
+1. mencari bisnis dari banyak kota dan kategori;
+2. membuka halaman publik untuk mencari email bisnis;
+3. membuang kandidat yang tidak mempunyai email publik;
+4. mengirim evidence ke Gemini;
+5. mendeteksi kebutuhan yang terlihat dan memilih satu layanan;
+6. membuat subject + body personal;
+7. memasukkan semuanya ke Google Sheets;
+8. meminta Apps Script mengirim antrean READY;
+9. meminta Apps Script memeriksa reply.
 
-GitHub Secrets wajib:
-GEMINI_API_KEY
-TINYFISH_API_KEY
-SHEET_WEBHOOK_URL
-WEBHOOK_TOKEN
-GMAIL_ADDRESS
-GMAIL_APP_PASSWORD
-AGENCY_NAME
+Saat ada reply, Apps Script menandai REPLIED/WA_HANDOFF dan mengirim balasan pada thread yang berisi link WhatsApp. Email yang meminta UNSUBSCRIBE langsung ditandai OPTOUT.
 
-Gmail:
-Gunakan akun Gmail khusus untuk outreach dan App Password, bukan password Gmail biasa. Aktifkan 2-Step Verification pada akun tersebut sebelum membuat App Password.
+## Layanan yang bisa dijual
 
-Pengiriman:
-GitHub Actions menjalankan engine pada 08:00, 14:00, 20:00, dan 02:00 WIB.
-Setiap run mencari prospect baru ber-email dan kemudian mengambil antrean READY.
-Daily send limit dihitung dari Google Sheet, sehingga total tidak melebihi 20 email/hari secara default.
+Virtual Assistant/Admin Remote, Customer Support/WhatsApp, Lead Generation, Social Media Management, Content/Design/Video, Copywriting, Research/Data Support, E-commerce Operations, Appointment Setting, dan Documents/Presentation/Reporting.
 
-Status Sheet:
-READY = lolos AI dan menunggu pengiriman otomatis
-SENT = sudah dikirim
-ERROR = gagal kirim dan akan dicoba lagi sampai 3 kali
-FAILED = gagal 3 kali
-REVIEW = belum lolos syarat kirim otomatis
-OPTOUT = tidak boleh dihubungi lagi
+Email tidak mengatakan "kami mengerjakan semua". AI memilih satu layanan berdasarkan bukti supaya outreach tetap relevan.
 
-Catatan:
-Cold outreach harus tetap relevan, sopan, dan mematuhi aturan anti-spam serta kebijakan penyedia email. Sistem ini bukan jaminan inbox placement atau hasil penjualan.
+## Google Sheet
+
+Sheet Prospects dibuat otomatis oleh Code.gs dengan kolom:
+Lead ID, tanggal, bisnis, email, sumber email, website, social, kota, kategori, bukti publik, skor, prioritas, kebutuhan terdeteksi, layanan direkomendasikan, pain point, hook, subject, body, status, Sent At, Reply At, Reply Intent, Last Reply, WhatsApp Handoff, Attempts, Last Error, Opt Out, catatan.
+
+Sheet Content disiapkan untuk kalender konten Instagram/TikTok.
+
+## Social media
+
+social_content.py menghasilkan ide/caption harian untuk Instagram dan TikTok. Metricool yang sudah terhubung bisa membantu penjadwalan dan auto-publish Instagram pada akun business/creator. Namun API Metricool sekarang hanya tersedia pada paket Advanced/Custom, bukan Free/Starter, sehingga integrasi API untuk auto-publish tidak bisa disebut 100% gratis.
+
+Karena targetmu gratis, V2 tidak memasukkan biaya API Metricool sebagai dependency. Content generator tetap otomatis; publishing dapat memakai scheduler gratis yang tersedia pada akunmu. DM automation penuh tidak dipaksakan lewat password/scraping karena membutuhkan akses platform yang sesuai.
+
+## Setup satu kali yang tetap membutuhkan otorisasi
+
+Agar sistem dapat menyentuh akunmu, kamu tetap harus memberikan otorisasi akun.
+
+1. Buka Google Sheet.
+2. Extensions -> Apps Script.
+3. Ganti Code.gs dengan apps-script/Code.gs di repo ini.
+4. Jalankan setup() satu kali dan izinkan Gmail + Spreadsheet.
+5. Deploy sebagai Web App dan salin URL-nya.
+6. Set Script Property WEBHOOK_TOKEN.
+7. Di GitHub Secrets, isi GEMINI_API_KEY, SHEET_WEBHOOK_URL, WEBHOOK_TOKEN.
+8. Aktifkan GitHub Actions.
+
+V2 tidak membutuhkan GMAIL_APP_PASSWORD atau TINYFISH_API_KEY.
+
+## Batasan penting
+
+"Semua perusahaan di internet" tidak dapat dijamin. Mesin hanya dapat menemukan bisnis yang punya jejak publik yang dapat diindeks/dibuka. Email yang ditemukan harus publik; tidak memakai database curian atau data dari login.
+
+20 email/hari adalah default yang sengaja konservatif. Quota Gmail dan Gemini dapat berubah atau habis.
