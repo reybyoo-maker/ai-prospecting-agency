@@ -197,7 +197,7 @@ function findThreadByLeadId_(id){
 function sendFollowupMessage_(leadId,email,subject,body){
   const thread=findThreadByLeadId_(leadId);
   if(thread){
-    thread.reply(body,{name:AGENCY_NAME,replyTo:ownerEmail_()});
+    thread.reply(body,{name:AGENCY_NAME});
     return "THREAD";
   }
   MailApp.sendEmail({to:email,subject:subject,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
@@ -292,7 +292,7 @@ function scanReplies_(limit){
     const replyText=wa
       ? "Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\n\nWhatsApp: "+wa+"\n\nSalam,\nRey\n"+AGENCY_NAME
       : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\n\nSalam,\nRey\n"+AGENCY_NAME;
-    try{thread.reply(replyText,{name:AGENCY_NAME,replyTo:ownerEmail_()});}catch(e){continue;}
+    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
     sh.getRange(row,col_("Status")).setValue(wa?"WA_HANDOFF":"REPLIED");
     sh.getRange(row,col_("Reply At")).setValue(now_());
     sh.getRange(row,col_("Reply Intent")).setValue(intent);
@@ -365,10 +365,32 @@ function publishTikTokPhoto_(imageUrl,caption){
   if(!token){
     try{token=refreshTikTok_();}catch(e){return {ok:false,error:String(e)};}
   }
+
+  let creator;
+  try{
+    creator=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/creator_info/query/",{
+      method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
+      payload:"{}",muteHttpExceptions:true
+    });
+  }catch(e){
+    try{
+      token=refreshTikTok_();
+      creator=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/creator_info/query/",{
+        method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
+        payload:"{}",muteHttpExceptions:true
+      });
+    }catch(err){return {ok:false,error:String(err)};}
+  }
+
+  const options=((creator.data&&creator.data.privacy_level_options)||[]);
+  const privacy=options.indexOf("PUBLIC_TO_EVERYONE")>=0
+    ? "PUBLIC_TO_EVERYONE"
+    : (options[0]||"SELF_ONLY");
+
   const initPayload={
     post_info:{
       description:String(caption||"").slice(0,2200),
-      privacy_level:"PUBLIC_TO_EVERYONE",
+      privacy_level:privacy,
       auto_add_music:false,
       brand_organic_toggle:true,
       is_aigc:true
@@ -377,19 +399,38 @@ function publishTikTokPhoto_(imageUrl,caption){
     post_mode:"DIRECT_POST",
     media_type:"PHOTO"
   };
-  let result=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/content/init/",{
-    method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
-    payload:JSON.stringify(initPayload),muteHttpExceptions:true
-  });
-  if(result.error && result.error.code && result.error.code!=="ok"){
-    token=refreshTikTok_();
+
+  let result;
+  try{
     result=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/content/init/",{
       method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
       payload:JSON.stringify(initPayload),muteHttpExceptions:true
     });
+  }catch(e){
+    try{
+      token=refreshTikTok_();
+      creator=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/creator_info/query/",{
+        method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
+        payload:"{}",muteHttpExceptions:true
+      });
+      const refreshedOptions=((creator.data&&creator.data.privacy_level_options)||[]);
+      initPayload.post_info.privacy_level=refreshedOptions.indexOf("PUBLIC_TO_EVERYONE")>=0
+        ? "PUBLIC_TO_EVERYONE" : (refreshedOptions[0]||"SELF_ONLY");
+      result=urlFetchJson_("https://open.tiktokapis.com/v2/post/publish/content/init/",{
+        method:"post",contentType:"application/json",headers:{Authorization:"Bearer "+token},
+        payload:JSON.stringify(initPayload),muteHttpExceptions:true
+      });
+    }catch(err){return {ok:false,error:String(err)};}
   }
-  if(result.error && result.error.code && result.error.code!=="ok")return {ok:false,error:JSON.stringify(result.error)};
-  return {ok:true,platform:"tiktok",publish_id:result.data&&result.data.publish_id?result.data.publish_id:""};
+
+  if(result.error && result.error.code && result.error.code!=="ok"){
+    return {ok:false,error:JSON.stringify(result.error)};
+  }
+  return {
+    ok:true,
+    platform:"tiktok",
+    publish_id:result.data&&result.data.publish_id?result.data.publish_id:""
+  };
 }
 
 function publishSocial_(body){
