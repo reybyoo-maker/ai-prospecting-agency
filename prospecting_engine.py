@@ -11,7 +11,7 @@ from service_catalog import catalog_text
 
 WIB = timezone(timedelta(hours=7))
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 SHEET_WEBHOOK_URL = os.environ["SHEET_WEBHOOK_URL"]
 WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
 MAX_PER_RUN = int(os.getenv("MAX_PER_RUN", "60"))
