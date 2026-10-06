@@ -34,25 +34,42 @@ function sheet_(){
   return sh;
 }
 
+function prospectDataLastRow_(sh){
+  const emailCol=col_("Email"), leadIdCol=col_("Lead ID");
+  const max=sh.getMaxRows();
+  if(max<2)return 1;
+  const emails=sh.getRange(2,emailCol,max-1,1).getValues();
+  const ids=sh.getRange(2,leadIdCol,max-1,1).getValues();
+  for(let i=max-2;i>=0;i--){
+    if(String(emails[i][0]||"").trim() || String(ids[i][0]||"").trim())return i+2;
+  }
+  return 1;
+}
+
 function backfillProspectControls_(sh){
-  const last=sh.getLastRow();
+  const last=prospectDataLastRow_(sh);
   if(last<2)return;
   const n=last-1, manualCol=col_("Manual Send"), resultCol=col_(SEND_RESULT_COL), statusCol=col_("Status");
   const statuses=sh.getRange(2,statusCol,n,1).getValues();
   const manual=sh.getRange(2,manualCol,n,1).getValues();
   const results=sh.getRange(2,resultCol,n,1).getValues();
   const handled=["SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF","OPTOUT"];
-  let manualChanged=false,resultChanged=false;
-  for(let i=0;i<n;i++){
-    if(manual[i][0]==="" || manual[i][0]===null){manual[i][0]=false;manualChanged=true;}
-    if(results[i][0]==="" || results[i][0]===null){
-      const st=String(statuses[i][0]||"").toUpperCase().trim();
-      results[i][0]=handled.indexOf(st)>=0 ? "LEGACY_EXISTING_STATE" : "WAITING_FOR_MANUAL_SEND";
-      resultChanged=true;
-    }
+  const manualOut=manual.map((r)=>[r[0]==="" || r[0]===null ? false : r[0]]);
+  const resultOut=results.map((r,i)=>{
+    if(r[0]!=="" && r[0]!==null)return [r[0]];
+    const st=String(statuses[i][0]||"").toUpperCase().trim();
+    return [handled.indexOf(st)>=0 ? "LEGACY_EXISTING_STATE" : "WAITING_FOR_MANUAL_SEND"];
+  });
+  if(JSON.stringify(manualOut)!==JSON.stringify(manual))sh.getRange(2,manualCol,n,1).setValues(manualOut);
+  if(JSON.stringify(resultOut)!==JSON.stringify(results))sh.getRange(2,resultCol,n,1).setValues(resultOut);
+
+  // Remove only automation-control residue below the last real lead.
+  // Business/lead columns are never touched.
+  const extraStart=last+1, extraCount=sh.getMaxRows()-last;
+  if(extraCount>0){
+    sh.getRange(extraStart,manualCol,extraCount,1).clearContent();
+    sh.getRange(extraStart,resultCol,extraCount,1).clearContent();
   }
-  if(manualChanged)sh.getRange(2,manualCol,n,1).setValues(manual);
-  if(resultChanged)sh.getRange(2,resultCol,n,1).setValues(results);
 }
 
 function ensureHeaders_(sh, headers){
@@ -71,7 +88,8 @@ function ensureHeaders_(sh, headers){
 function configureProspectControls_(sh){
   const manualCol=col_("Manual Send");
   if(manualCol<1)return;
-  const rows=Math.max(sh.getMaxRows()-1,100);
+  const last=prospectDataLastRow_(sh);
+  const rows=Math.max(1,last-1);
   sh.getRange(2,manualCol,rows,1)
     .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build())
     .setHorizontalAlignment("center");
@@ -351,6 +369,7 @@ function doPost(e){
     const a=body.action||"ingest";
     if(a==="healthcheck")return liveHealth_();
     if(a==="ingest")return ingest_(body.rows||[]);
+    if(a==="repair_layout")return repairProspectLayout_();
     if(a==="send_queue")return sendQueue_(Number(body.limit||DAILY_SEND_LIMIT));
     if(a==="scan_replies")return scanReplies_(Number(body.limit||20));
     if(a==="process_followups")return processFollowups_(Number(body.limit||MAX_FOLLOWUPS_PER_RUN));
@@ -386,14 +405,28 @@ function ingest_(rows){
     set("Subject",row.subject); set("Body",row.body); set("Status",row.status||"REVIEW");
     set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
     set("Manual Send",false); set("Send Result","WAITING_FOR_MANUAL_SEND");
-    sh.appendRow(o);
-    const newRow=sh.getLastRow();
+    const newRow=prospectDataLastRow_(sh)+1;
+    sh.getRange(newRow,1,1,HEADERS.length).setValues([o]);
     sh.getRange(newRow,col_("Manual Send"))
       .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build())
       .setValue(false);
     existing[email]=true; added++;
   });
   return json_({ok:true,received:rows.length,added:added,duplicates:duplicates,no_email:noEmail});
+}
+
+function repairProspectLayout_(){
+  const sh=sheet_();
+  const last=prospectDataLastRow_(sh);
+  const manualCol=col_("Manual Send"), resultCol=col_(SEND_RESULT_COL);
+  const extraCount=Math.max(0,sh.getMaxRows()-last);
+  if(extraCount>0){
+    sh.getRange(last+1,manualCol,extraCount,1).clearContent();
+    sh.getRange(last+1,resultCol,extraCount,1).clearContent();
+  }
+  configureProspectControls_(sh);
+  backfillProspectControls_(sh);
+  return json_({ok:true,data_last_row:last,controls_cleared_below:last});
 }
 
 function findRowById_(id){
