@@ -198,7 +198,7 @@ def candidate_urls(url):
     if not parsed.scheme or not parsed.netloc:
         return []
     base=f"{parsed.scheme}://{parsed.netloc}"
-    return [url, *[base+p for p in CONTACT_PATHS]]
+    return [url, *[base+p for p in CONTACT_PATHS[:2]]]
 
 def enrich_candidate(url, evidence):
     combined=norm(evidence)
