@@ -25,6 +25,19 @@ CAROUSEL_DIR = Path("carousels")
 SLIDE_COUNT = 7
 PLAN_DAYS = 7
 
+BLUE = "#0B5FFF"
+NAVY = "#073B8C"
+BLUE_2 = "#2F80ED"
+LIGHT_BLUE = "#DCEBFF"
+PALE_BLUE = "#F4F8FF"
+INK = "#10233B"
+MUTED = "#607080"
+WHITE = "#FFFFFF"
+CYAN = "#8FD3FF"
+
+DESIGN_STYLES = ["BOLD_EDITORIAL","SPLIT_SCREEN","DASHBOARD","FLOW_DIAGRAM","CARD_STACK","TYPE_POSTER","MINIMAL_TECH"]
+CONTENT_ANGLES = ["framework 3-5 langkah yang bisa langsung diterapkan","myth vs reality yang membongkar miskonsepsi","audit checklist untuk menemukan bottleneck","decision guide yang membantu memilih cara A atau B","workflow end-to-end yang realistis","mistake breakdown + perbaikan praktis","quick wins yang bisa dikerjakan dalam 30 menit"]
+
 
 def font(size: int, bold: bool = False):
     candidates = [
@@ -89,9 +102,10 @@ def generate_plan() -> list[dict]:
                                 "properties": {
                                     "title": {"type": "string"},
                                     "body": {"type": "string"},
-                                    "visual_direction": {"type": "string"}
+                                    "visual_direction": {"type": "string"},
+                        "design_notes": {"type": "string"}
                                 },
-                                "required": ["title", "body", "visual_direction"]
+                                "required": ["title", "body", "visual_direction", "design_notes"]
                             },
                             "minItems": SLIDE_COUNT,
                             "maxItems": SLIDE_COUNT
@@ -110,23 +124,35 @@ Layanan Sonjaya:
 
 Buat CONTENT PLANNING {PLAN_DAYS} hari mulai {start}.
 Setiap hari = tepat 1 carousel Instagram yang juga bisa dipakai sebagai TikTok photo post.
-Setiap carousel = tepat {SLIDE_COUNT} slide dengan alur:
-1. COVER/hook yang menghentikan scroll
-2. masalah/konteks
-3. insight utama
-4. langkah praktis
-5. contoh penerapan
-6. kesalahan yang harus dihindari
-7. CTA yang ringan
+Setiap carousel = tepat {SLIDE_COUNT} slide.
 
-Gaya:
-- clean, premium, modern, rapi, mudah dipindai di HP
-- bahasa Indonesia natural, bukan tulisan AI kaku
+ANGLE WAJIB PER HARI:
+Hari 1: framework 3-5 langkah yang bisa langsung diterapkan
+Hari 2: myth vs reality yang membongkar miskonsepsi
+Hari 3: audit checklist untuk menemukan bottleneck
+Hari 4: decision guide yang membantu memilih cara A atau B
+Hari 5: workflow end-to-end yang realistis
+Hari 6: mistake breakdown + perbaikan praktis
+Hari 7: quick wins yang bisa dikerjakan dalam 30 menit
+
+BRAND:
+- palet utama hanya biru, biru muda, putih, dan navy
+- setiap carousel wajib punya elemen robot/maskot AI
+- setiap hari wajib memakai design family berbeda: BOLD_EDITORIAL, SPLIT_SCREEN, DASHBOARD, FLOW_DIAGRAM, CARD_STACK, TYPE_POSTER, MINIMAL_TECH
+- satu brand, tujuh rasa visual; jangan mengulang komposisi cover atau posisi robot antar hari
+- gunakan typography hierarchy, grid modern, rounded cards, subtle depth, diagram, numbered markers, dan white space
+- visual_direction harus konkret dan bisa digambar dengan shape/ikon/diagram/robot
+- design_notes wajib menjelaskan komposisi spesifik untuk hari tersebut
+
+COPY:
+- bahasa Indonesia natural, tajam, dan praktis
 - satu ide utama per slide
-- body tiap slide singkat, maksimal sekitar 30-45 kata
+- body sekitar 20-45 kata
+- hook spesifik dan membuat orang ingin swipe
+- contoh operasional realistis untuk UMKM/bisnis Indonesia
 - jangan mengarang testimoni, omzet, data, hasil, klien, atau angka tanpa sumber
-- soft selling; jangan hard sell di setiap slide
-- visual_direction harus menjelaskan ilustrasi/diagram/ikon/foto konseptual yang cocok
+- soft selling; maksimal satu slide eksplisit menawarkan jasa
+- CTA bervariasi
 - jangan memerintahkan upload atau publish otomatis
 Return JSON only.
 """
@@ -166,70 +192,196 @@ Return JSON only.
             "caption": str(p.get("caption") or "Insight praktis untuk pemilik bisnis Indonesia."),
             "cta": str(p.get("cta") or "Simpan post ini dan bagikan ke tim."),
             "slides": slides,
+            "design_style": DESIGN_STYLES[offset % DESIGN_STYLES.length],
+            "content_angle": CONTENT_ANGLES[offset % CONTENT_ANGLES.length],
         })
     return cleaned
 
 
-def render_slide(slide: dict, index: int, total: int, topic: str, cover: bool = False) -> Image.Image:
-    W, H = 1080, 1350
-    bg = "#F7F4EE"
-    ink = "#16202A"
-    accent = "#FF6B35"
-    muted = "#66717C"
-    card = "#FFFFFF"
+def draw_robot(draw: ImageDraw.ImageDraw, x: int, y: int, scale: float = 1.0, pose: int = 0, invert: bool = False):
+    s=float(scale)
+    outline=NAVY
+    face=BLUE if invert else LIGHT_BLUE
+    body=WHITE if invert else PALE_BLUE
+    accent=CYAN if invert else BLUE_2
+    def b(a,b,c,d): return (int(x+a*s),int(y+b*s),int(x+c*s),int(y+d*s))
+    draw.rounded_rectangle(b(22,78,178,232),radius=int(28*s),fill=body,outline=outline,width=max(2,int(5*s)))
+    draw.rounded_rectangle(b(43,40,157,120),radius=int(24*s),fill=face,outline=outline,width=max(2,int(5*s)))
+    draw.line((int(x+100*s),int(y+40*s),int(x+100*s),int(y+10*s)),fill=outline,width=max(2,int(5*s)))
+    draw.ellipse(b(94,1,106,13),fill=accent,outline=outline,width=max(1,int(3*s)))
+    draw.ellipse(b(67,68,81,82),fill=outline)
+    draw.ellipse(b(119,68,133,82),fill=outline)
+    draw.rounded_rectangle(b(70,91,130,106),radius=int(7*s),fill=WHITE,outline=outline,width=max(1,int(2*s)))
+    draw.rounded_rectangle(b(58,140,142,192),radius=int(12*s),fill=face,outline=outline,width=max(2,int(3*s)))
+    draw.rounded_rectangle(b(76,151,124,175),radius=int(7*s),fill=WHITE)
+    draw.line((int(x+86*s),int(y+163*s),int(x+114*s),int(y+163*s)),fill=BLUE,width=max(2,int(4*s)))
+    p=pose%4
+    if p==0:
+        draw.line((int(x+22*s),int(y+143*s),int(x-10*s),int(y+110*s)),fill=outline,width=max(2,int(7*s)))
+        draw.line((int(x+178*s),int(y+143*s),int(x+208*s),int(y+165*s)),fill=outline,width=max(2,int(7*s)))
+    elif p==1:
+        draw.line((int(x+22*s),int(y+145*s),int(x-12*s),int(y+145*s)),fill=outline,width=max(2,int(7*s)))
+        draw.line((int(x+178*s),int(y+145*s),int(x+208*s),int(y+112*s)),fill=outline,width=max(2,int(7*s)))
+    elif p==2:
+        draw.line((int(x+30*s),int(y+140*s),int(x-4*s),int(y+80*s)),fill=outline,width=max(2,int(7*s)))
+        draw.line((int(x+170*s),int(y+140*s),int(x+204*s),int(y+82*s)),fill=outline,width=max(2,int(7*s)))
+    else:
+        draw.line((int(x+25*s),int(y+148*s),int(x-4*s),int(y+180*s)),fill=outline,width=max(2,int(7*s)))
+        draw.line((int(x+175*s),int(y+148*s),int(x+204*s),int(y+180*s)),fill=outline,width=max(2,int(7*s)))
 
-    img = Image.new("RGB", (W, H), bg)
-    draw = ImageDraw.Draw(img)
 
-    # Decorative system: clean editorial grid, consistent across a carousel.
-    draw.rounded_rectangle((62, 62, W - 62, H - 62), radius=42, outline="#D7D0C5", width=3)
-    draw.ellipse((W - 255, 72, W - 82, 245), fill=accent)
-    draw.ellipse((W - 150, 137, W - 96, 191), fill=bg)
+def add_header(draw, index: int, total: int):
+    draw.text((68,48),"SONJAYA",font=font(28,True),fill=NAVY)
+    draw.text((860,48),f"{index:02d}/{total:02d}",font=font(24,True),fill=MUTED)
+    draw.rounded_rectangle((68,94,250,108),radius=7,fill=LIGHT_BLUE)
+    draw.rounded_rectangle((68,94,118+index*18,108),radius=7,fill=BLUE)
 
-    draw.text((88, 86), "SONJAYA", font=font(34, True), fill=ink)
-    draw.text((W - 205, 93), f"{index}/{total}", font=font(30, True), fill=bg)
 
-    title = str(slide.get("title") or "").strip()
-    body = str(slide.get("body") or "").strip()
-    visual = str(slide.get("visual_direction") or "").strip()
+def draw_title(draw, text, x, y, max_width, size, fill=INK, max_lines=4):
+    fnt=font(size,True)
+    for line in wrap_lines(draw,text,fnt,max_width,max_lines):
+        draw.text((x,y),line,font=fnt,fill=fill)
+        y += int(size*1.16)
+    return y
+
+
+def draw_body(draw, text, x, y, max_width, size=31, fill=MUTED, max_lines=6):
+    fnt=font(size)
+    for line in wrap_lines(draw,text,fnt,max_width,max_lines):
+        draw.text((x,y),line,font=fnt,fill=fill)
+        y += int(size*1.42)
+    return y
+
+
+def render_slide(slide: dict, index: int, total: int, topic: str, cover: bool = False, style: str = "BOLD_EDITORIAL", post_day: int = 0) -> Image.Image:
+    W,H=1080,1350
+    img=Image.new("RGB",(W,H),PALE_BLUE)
+    draw=ImageDraw.Draw(img)
+    title=str(slide.get("title") or "").strip()
+    body=str(slide.get("body") or "").strip()
+    visual=str(slide.get("visual_direction") or "").strip()
+    notes=str(slide.get("design_notes") or "").strip()
+
+    draw.rounded_rectangle((36,36,W-36,H-36),radius=42,outline=LIGHT_BLUE,width=3)
+    add_header(draw,index,total)
 
     if cover:
-        draw.text((88, 215), "CONTENT CAROUSEL", font=font(26, True), fill=accent)
-        title_lines = wrap_lines(draw, title, font(76, True), 760, 4)
-        y = 305
-        for line in title_lines:
-            draw.text((88, y), line, font=font(76, True), fill=ink)
-            y += 92
-        draw.rounded_rectangle((88, 770, W - 88, 970), radius=30, fill=ink)
-        blines = wrap_lines(draw, body, font(34), 830, 4)
-        y = 808
-        for line in blines:
-            draw.text((126, y), line, font=font(34), fill=bg)
-            y += 48
-        draw.text((88, 1060), topic[:80], font=font(28, True), fill=muted)
+        if style=="SPLIT_SCREEN":
+            draw.rounded_rectangle((58,158,630,1190),radius=38,fill=WHITE)
+            draw.rounded_rectangle((610,158,W-58,1190),radius=38,fill=BLUE)
+            draw_robot(draw,710,300,1.16,(post_day+index)%4,True)
+            draw.text((92,214),"AI × BUSINESS",font=font(23,True),fill=BLUE)
+            draw_title(draw,title,92,275,470,60,INK,5)
+            draw_body(draw,body,92,700,460,30,MUTED,6)
+        elif style=="DASHBOARD":
+            draw.rounded_rectangle((70,165,W-70,1185),radius=40,fill=WHITE)
+            draw.rounded_rectangle((102,203,370,267),radius=18,fill=LIGHT_BLUE)
+            draw.text((128,222),"PLAYBOOK",font=font(25,True),fill=NAVY)
+            draw_robot(draw,805,190,0.82,(post_day+index)%4)
+            draw_title(draw,title,110,315,740,57,INK,4)
+            draw.rounded_rectangle((110,690,900,990),radius=28,fill=BLUE)
+            draw_body(draw,body,150,740,710,32,WHITE,6)
+        elif style=="FLOW_DIAGRAM":
+            draw.text((92,205),"WORKFLOW",font=font(22,True),fill=BLUE)
+            draw_robot(draw,815,195,0.72,(post_day+index)%4)
+            draw_title(draw,title,92,275,690,58,INK,4)
+            labels=["INPUT","PROCESS","OUTPUT"]
+            xs=[110,380,650]
+            for k,(x,label) in enumerate(zip(xs,labels)):
+                draw.rounded_rectangle((x,700,x+200,790),radius=20,fill=WHITE,outline=LIGHT_BLUE,width=3)
+                draw.text((x+34,728),label,font=font(22,True),fill=NAVY)
+                if k<2:
+                    draw.line((x+200,745,xs[k+1]-20,745),fill=BLUE_2,width=7)
+            draw_body(draw,body,115,875,820,30,MUTED,5)
+        elif style=="CARD_STACK":
+            draw.rounded_rectangle((120,245,930,895),radius=32,fill=LIGHT_BLUE)
+            draw.rounded_rectangle((98,220,908,870),radius=32,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw.rounded_rectangle((76,195,886,845),radius=32,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw_robot(draw,790,255,0.60,(post_day+index)%4)
+            draw.text((122,265),f"CARD {index-1}",font=font(22,True),fill=BLUE)
+            draw_title(draw,title,122,335,650,56,INK,4)
+            draw_body(draw,body,122,620,700,30,MUTED,6)
+        elif style=="TYPE_POSTER":
+            draw.text((90,190),"THE SONJAYA NOTE",font=font(22,True),fill=BLUE)
+            draw.text((850,188),f"0{index}",font=font(34,True),fill=LIGHT_BLUE)
+            draw_robot(draw,770,260,0.72,(post_day+index)%4)
+            draw_title(draw,title,90,300,860,68,INK,4)
+            draw.rectangle((90,705,260,718),fill=BLUE)
+            draw_body(draw,body,90,790,790,31,MUTED,6)
+        elif style=="MINIMAL_TECH":
+            draw.line((120,205,120,1060),fill=BLUE,width=8)
+            for cy in (300,520,740,960):
+                draw.ellipse((95,cy,145,cy+50),fill=LIGHT_BLUE,outline=BLUE,width=2)
+            draw_robot(draw,780,220,0.66,(post_day+index)%4)
+            draw_title(draw,title,180,240,720,58,INK,4)
+            draw_body(draw,body,180,610,720,31,MUTED,7)
+        else:
+            draw.rounded_rectangle((60,155,335,1195),radius=42,fill=BLUE)
+            draw_robot(draw,112,760,0.92,(post_day+index)%4,True)
+            draw.text((95,210),"AI OPS",font=font(24,True),fill=WHITE)
+            draw.text((370,225),"INSIGHT",font=font(22,True),fill=BLUE)
+            draw_title(draw,title,370,290,620,60,INK,5)
+            draw.rounded_rectangle((370,715,940,1015),radius=30,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw_body(draw,body,410,765,490,31,INK,7)
     else:
-        draw.text((88, 220), f"SLIDE {index}", font=font(28, True), fill=accent)
-        title_lines = wrap_lines(draw, title, font(61, True), 820, 4)
-        y = 300
-        for line in title_lines:
-            draw.text((88, y), line, font=font(61, True), fill=ink)
-            y += 75
+        if style=="SPLIT_SCREEN":
+            draw.rounded_rectangle((74,190,610,1170),radius=34,fill=BLUE)
+            draw.rounded_rectangle((590,190,1006,1170),radius=34,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw_robot(draw,690,330,0.72,(post_day+index)%4)
+            draw_title(draw,title,105,250,430,54,WHITE,5)
+            draw_body(draw,body,105,640,390,29,WHITE,8)
+        elif style=="DASHBOARD":
+            draw.rounded_rectangle((74,185,1006,1170),radius=34,fill=WHITE)
+            draw.text((108,225),"FIELD NOTE",font=font(22,True),fill=BLUE)
+            draw_robot(draw,825,220,0.58,(post_day+index)%4)
+            draw_title(draw,title,108,310,760,56,INK,4)
+            draw.line((108,625,930,625),fill=LIGHT_BLUE,width=5)
+            draw_body(draw,body,108,680,790,31,INK,7)
+            draw.rounded_rectangle((108,1010,500,1100),radius=18,fill=PALE_BLUE,outline=LIGHT_BLUE,width=2)
+            draw.text((135,1038),"Visual cue",font=font(19,True),fill=BLUE)
+        elif style=="FLOW_DIAGRAM":
+            draw.rounded_rectangle((74,185,1006,1170),radius=34,fill=WHITE)
+            draw.text((108,225),"WORKFLOW",font=font(22,True),fill=BLUE)
+            draw_robot(draw,820,215,0.58,(post_day+index)%4)
+            draw_title(draw,title,108,300,720,55,INK,4)
+            lines=wrap_lines(draw,body,font(30),760,7)
+            y=650
+            for n,line in enumerate(lines,1):
+                draw.rounded_rectangle((110,y-4,165,y+44),radius=13,fill=BLUE)
+                draw.text((128,y+5),str(n),font=font(20,True),fill=WHITE)
+                draw.text((190,y+1),line,font=font(29),fill=INK)
+                y+=52
+        elif style=="CARD_STACK":
+            draw.rounded_rectangle((120,260,930,920),radius=32,fill=LIGHT_BLUE)
+            draw.rounded_rectangle((96,235,906,895),radius=32,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw.rounded_rectangle((72,210,882,870),radius=32,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw_robot(draw,785,265,0.58,(post_day+index)%4)
+            draw_title(draw,title,118,350,660,55,INK,4)
+            draw_body(draw,body,118,650,700,30,MUTED,7)
+        elif style=="TYPE_POSTER":
+            draw.text((100,210),f"0{index}",font=font(31,True),fill=BLUE)
+            draw_title(draw,title,100,285,850,60,INK,4)
+            draw.rectangle((100,650,280,664),fill=BLUE)
+            draw_body(draw,body,100,730,790,31,MUTED,7)
+            draw_robot(draw,790,930,0.60,(post_day+index)%4,True)
+        elif style=="MINIMAL_TECH":
+            draw.line((120,210,120,1070),fill=BLUE,width=8)
+            draw_robot(draw,790,215,0.58,(post_day+index)%4)
+            draw_title(draw,title,185,250,720,56,INK,4)
+            draw_body(draw,body,185,620,700,30,MUTED,8)
+        else:
+            draw.rounded_rectangle((74,185,1006,1170),radius=34,fill=WHITE,outline=LIGHT_BLUE,width=3)
+            draw.text((110,225),"INSIGHT",font=font(22,True),fill=BLUE)
+            draw_robot(draw,805,210,0.58,(post_day+index)%4)
+            draw_title(draw,title,110,330,760,58,INK,4)
+            draw.rounded_rectangle((110,720,930,1030),radius=28,fill=BLUE)
+            draw_body(draw,body,150,765,730,31,WHITE,7)
 
-        draw.rounded_rectangle((88, 620, W - 88, 950), radius=34, fill=card)
-        body_lines = wrap_lines(draw, body, font(40), 820, 6)
-        y = 674
-        for line in body_lines:
-            draw.text((128, y), line, font=font(40), fill=ink)
-            y += 58
-
-        draw.rounded_rectangle((88, 1010, W - 88, 1160), radius=26, fill="#EEE8DD")
-        visual_lines = wrap_lines(draw, "Visual: " + visual, font(25), 820, 3)
-        y = 1042
-        for line in visual_lines:
-            draw.text((124, y), line, font=font(25), fill=muted)
-            y += 34
-
-    draw.text((88, 1230), "Save • Share • Implement", font=font(24, True), fill=muted)
+    # Footer changes across slide positions so the deck feels designed, not repeated.
+    footer_text = ["SWIPE →","SAVE THIS","TRY IT TODAY","CHECKLIST","EXAMPLE","AVOID THIS","COMMENT / DM"][min(index-1,6)]
+    draw.rounded_rectangle((74,1195,1006,1230),radius=16,fill=BLUE)
+    draw.text((98,1202),footer_text,font=font(17,True),fill=WHITE)
+    draw.text((68,1265),"SONJAYA • AI-POWERED REMOTE BUSINESS SUPPORT",font=font(19,True),fill=MUTED)
     return img
 
 
@@ -247,6 +399,8 @@ def build_carousel(post: dict) -> dict:
             SLIDE_COUNT,
             post["topic"],
             cover=(idx == 1),
+            style=post.get("design_style","BOLD_EDITORIAL"),
+            post_day=idx,
         )
         slide_path = folder / f"{idx:02d}.png"
         image.save(slide_path, format="PNG", optimize=True)
