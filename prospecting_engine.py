@@ -20,11 +20,8 @@ SEND_LIMIT = int(os.getenv("SEND_LIMIT", "20"))
 SEARCH_BACKENDS = os.getenv("SEARCH_BACKENDS", "google,brave,bing,duckduckgo").strip()
 SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", "25"))
 QUERY_PAUSE = float(os.getenv("QUERY_PAUSE", "0.6"))
-CONTACT_PATHS = (
-    "/contact", "/kontak", "/hubungi-kami", "/hubungi",
-    "/about", "/tentang-kami", "/tentang"
-)
-MAX_CRAWL_PER_QUERY = int(os.getenv("MAX_CRAWL_PER_QUERY", "3"))
+CONTACT_PATHS = ("/contact", "/kontak", "/hubungi-kami", "/hubungi", "/about", "/tentang-kami", "/tentang")
+MAX_CRAWL_PER_QUERY = int(os.getenv("MAX_CRAWL_PER_QUERY", "2"))
 MAX_EMAIL_RESULTS_PER_QUERY = int(os.getenv("MAX_EMAIL_RESULTS_PER_QUERY", "6"))
 
 
@@ -157,7 +154,7 @@ def fetch(url):
         r=requests.get(
             url,
             headers={"User-Agent":"Mozilla/5.0 SonjayaAI/2.1"},
-            timeout=12,
+            timeout=8,
             allow_redirects=True
         )
         r.raise_for_status()
