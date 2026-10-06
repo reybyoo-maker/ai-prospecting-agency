@@ -1,45 +1,31 @@
-name: Daily AI Prospecting + Email
+name: Sonjaya 24x7 AI Sales Engine
 
 on:
   workflow_dispatch:
-
   schedule:
-    - cron: "0 1 * * *"
-    - cron: "0 7 * * *"
-    - cron: "0 13 * * *"
-    - cron: "0 19 * * *"
+    - cron: "17 */2 * * *"
+
+permissions:
+  contents: read
 
 jobs:
   run-engine:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
+      - name: Install
         run: pip install -r requirements.txt
-
-      - name: Run AI Sales Engine
+      - name: Discover, score, send, route replies
         env:
-          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
-          TINYFISH_API_KEY: \${{ secrets.TINYFISH_API_KEY }}
-          SHEET_WEBHOOK_URL: \${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: \${{ secrets.WEBHOOK_TOKEN }}
-          GMAIL_ADDRESS: \${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: \${{ secrets.GMAIL_APP_PASSWORD }}
-          AGENCY_NAME: \${{ secrets.AGENCY_NAME }}
-          QUERIES_PER_RUN: "8"
-          MAX_PER_QUERY: "12"
-          MAX_CANDIDATES: "80"
-          AUTO_SEND_MIN_SCORE: "75"
-          DAILY_SEND_LIMIT: "20"
-          MAX_SEND_PER_RUN: "6"
-          SEND_DELAY_MIN: "20"
-          SEND_DELAY_MAX: "45"
-        run: python main.py
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          GEMINI_MODEL: "gemini-2.5-flash-lite"
+          MAX_PER_RUN: "60"
+          MAX_AI_PER_RUN: "40"
+          SEND_LIMIT: "20"
+        run: python prospecting_engine.py
