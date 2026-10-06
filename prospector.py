@@ -172,89 +172,143 @@ def build_query_pool():
 
     return pool
 
-def collect_prospects(
-    queries_per_run: int = 8,
-    max_per_query: int = 12,
-):
-    pool = build_query_pool()
 
-    now = datetime.now(
-        timezone(timedelta(hours=7))
+EMAIL_RE = re.compile(
+    r"(?<![\w.+-])([A-Z0-9._%+-]+(?:\s*\[at\]\s*|\s*\(at\)\s*|@)"
+    r"[A-Z0-9.-]+(?:\s*\[dot\]\s*|\s*\(dot\)\s*|\.)[A-Z]{2,})(?![\w.-])",
+    re.I,
+)
+BLOCKED_EMAIL_PREFIXES = ("noreply@", "no-reply@", "donotreply@", "do-not-reply@")
+
+def normalize_email(value: str) -> str:
+    value = re.sub(r"\s+", "", str(value or "").strip().lower())
+    return (
+        value.replace("[at]", "@")
+        .replace("(at)", "@")
+        .replace("[dot]", ".")
+        .replace("(dot)", ".")
     )
 
-    slot = now.hour // 6
-    day = now.timetuple().tm_yday
+def extract_public_email(text: str) -> str:
+    for match in EMAIL_RE.findall(text or ""):
+        email = normalize_email(match)
+        if "@" not in email or email.startswith(BLOCKED_EMAIL_PREFIXES):
+            continue
+        if email.endswith((".png", ".jpg", ".jpeg", ".webp", ".svg")):
+            continue
+        return email
+    return ""
 
-    start = (
-        (day * 4 + slot)
-        * queries_per_run
-    ) % len(pool)
+def fetch_public_email(url: str) -> tuple[str, str]:
+    if not url or "instagram.com" in url.lower():
+        return "", ""
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=12,
+            allow_redirects=True,
+        )
+        html = response.text[:250000]
+        email = extract_public_email(html)
+        if email:
+            return email, url
 
+        parsed = urlparse(response.url)
+        root = f"{parsed.scheme}://{parsed.netloc}"
+        for path in ("/contact", "/kontak", "/contact-us", "/kontak-kami"):
+            page = root + path
+            try:
+                page_response = requests.get(
+                    page,
+                    headers=HEADERS,
+                    timeout=10,
+                    allow_redirects=True,
+                )
+                email = extract_public_email(page_response.text[:200000])
+                if email:
+                    return email, page
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return "", ""
+
+def collect_prospects(
+    queries_per_run=8,
+    max_per_query=12,
+):
+    pool = build_query_pool()
+    now = datetime.now(timezone(timedelta(hours=7)))
+    slot = now.timetuple().tm_yday * 24 + now.hour
+    start = (slot * queries_per_run) % len(pool)
     selected = [
-        pool[
-            (start + i) % len(pool)
-        ]
+        pool[(start + i) % len(pool)]
         for i in range(queries_per_run)
     ]
+
+    found = {}
+    web_checked = 0
+    no_email = 0
 
     print(
         f"Nationwide TinyFish search | "
         f"{queries_per_run} queries/run | "
-        f"rotation={start}"
+        f"email wajib | rotation={start}"
     )
 
-    found = {}
-
-    for index, query in enumerate(
-        selected,
-        start=1,
-    ):
+    for index, query in enumerate(selected, start=1):
         try:
             results = search(query)
-
             added = 0
 
             for result in results:
                 if not isinstance(result, dict):
                     continue
 
-                username, profile_url = (
-                    extract_profile_from_result(
-                        result
-                    )
+                url = result.get("url") or result.get("link") or ""
+                title = str(result.get("title", ""))
+                snippet = str(
+                    result.get("snippet")
+                    or result.get("description")
+                    or result.get("text")
+                    or ""
                 )
+                evidence = f"{title} {snippet}".strip()
 
-                if not username:
+                recipient_email = extract_public_email(evidence)
+                email_source = url
+
+                if not recipient_email and url and web_checked < 45:
+                    recipient_email, email_source = fetch_public_email(url)
+                    web_checked += 1
+
+                if not recipient_email:
+                    no_email += 1
                     continue
 
-                key = username.lower()
+                key = recipient_email.lower()
+                if key in found:
+                    continue
 
-                if key not in found:
-                    evidence = " ".join(
-                        str(result.get(k, ""))
-                        for k in (
-                            "title",
-                            "snippet",
-                            "description",
-                        )
-                        if result.get(k)
-                    )
+                username = instagram_username(url)
+                social_url = (
+                    f"https://www.instagram.com/{username}/"
+                    if username else ""
+                )
 
-                    found[key] = {
-                        "username": username,
-                        "instagram_url": profile_url,
-                        "search_title": str(
-                            result.get(
-                                "title",
-                                ""
-                            )
-                        ),
-                        "public_evidence": (
-                            evidence[:1600]
-                        ),
-                        "source_query": query,
-                    }
-                    added += 1
+                found[key] = {
+                    "recipient_email": recipient_email,
+                    "email_source_url": email_source or url,
+                    "website_url": (
+                        url if "instagram.com" not in url.lower() else ""
+                    ),
+                    "social_url": social_url,
+                    "search_title": title,
+                    "public_evidence": evidence[:1800],
+                    "source_query": query,
+                }
+                added += 1
 
                 if added >= max_per_query:
                     break
@@ -262,26 +316,19 @@ def collect_prospects(
             print(
                 f"Query {index}/{queries_per_run} | "
                 f"{len(results)} results | "
-                f"{added} new profiles"
+                f"{added} prospek ber-email"
             )
-
         except Exception as exc:
             print(
-                f"Query {index}/{queries_per_run} | "
-                f"FAILED | {exc}"
+                f"Query {index}/{queries_per_run} | FAILED | {exc}"
             )
 
-        # Keep below a conservative search request pace.
-        time.sleep(3)
+        time.sleep(2)
 
     print(
-        f"Profil Instagram valid unik: "
-        f"{len(found)}"
+        f"Prospek unik dengan email publik: {len(found)} | "
+        f"tanpa email dibuang: {no_email} | "
+        f"website dicek: {web_checked}"
     )
 
-    if not found:
-        raise RuntimeError(
-            "Tidak menemukan profil Instagram valid."
-        )
-
-    return list(found.values())[:100]
+    return list(found.values())
