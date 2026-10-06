@@ -127,7 +127,7 @@ function handleInstagramWebhook_(body){
       processed++;
       if(!commentId||!commentMatchesKeyword_(text)||socialCommentExists_(commentId))return;
       matched++;
-      const wa=waLink_(username||"Instagram lead",username||"");
+      const wa=socialWaLink_(username||"Instagram lead");
       let dmStatus="NO_WA_NUMBER",note="Keyword cocok; WA_NUMBER belum diatur.";
       if(wa){
         try{
@@ -194,6 +194,14 @@ function waLink_(business,email){
   return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
 }
 
+function socialWaLink_(username){
+  const number=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\D/g,"");
+  if(!number)return "";
+  const name=String(username||"Instagram lead").replace(/^@/,"");
+  const text="Halo Rey, saya dari Instagram @"+name+". Saya komen REY MAU dan ingin info tentang jasa Sonjaya.";
+  return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
+}
+
 function onOpen(){
   SpreadsheetApp.getUi().createMenu("Sonjaya")
     .addItem("Kirim Lead Terpilih","sendSelectedRows_")
@@ -201,7 +209,7 @@ function onOpen(){
     .addToUi();
 }
 
-function onEdit(e){
+function manualSendOnEdit_(e){
   try{
     if(!e||!e.range)return;
     const sh=e.range.getSheet();
@@ -666,6 +674,10 @@ function setup(){
   const triggers=ScriptApp.getProjectTriggers();
   if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
     ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
+  }
+  const spreadsheetId=SpreadsheetApp.getActiveSpreadsheet().getId();
+  if(!triggers.some(t=>t.getHandlerFunction()==="manualSendOnEdit_")){
+    ScriptApp.newTrigger("manualSendOnEdit_").forSpreadsheet(spreadsheetId).onEdit().create();
   }
   return "Sonjaya system ready";
 }
