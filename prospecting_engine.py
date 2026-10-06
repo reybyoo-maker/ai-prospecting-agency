@@ -50,7 +50,7 @@ def page_evidence(url):
     return text, extract_email(text+" "+html)
 
 def extract_social(text):
-    m=re.search(r"https?://(?:www\.)?(?:instagram\.com|tiktok\.com)/[^\s<>"]+",str(text or ""),re.I)
+    m=re.search(r'https?://(?:www\.)?(?:instagram\.com|tiktok\.com)/[^\s<>"]+',str(text or ""),re.I)
     return m.group(0) if m else ""
 
 def search_queries():
