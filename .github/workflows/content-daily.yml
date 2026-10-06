@@ -1,0 +1,27 @@
+name: Sonjaya Daily Social Content
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 1 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Generate 7-day Instagram and TikTok calendar
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          GEMINI_MODEL: "gemini-2.5-flash-lite"
+        run: python content_runner.py
