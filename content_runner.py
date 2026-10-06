@@ -10,7 +10,7 @@ from service_catalog import catalog_text
 
 WIB=timezone(timedelta(hours=7))
 KEY=os.environ["GEMINI_API_KEY"]
-MODEL=os.getenv("GEMINI_MODEL","gemini-2.5-flash-lite")
+MODEL=os.getenv("GEMINI_MODEL","gemini-3.5-flash-lite")
 SHEET_WEBHOOK_URL=os.environ["SHEET_WEBHOOK_URL"]
 WEBHOOK_TOKEN=os.environ["WEBHOOK_TOKEN"]
 REPO=os.getenv("GITHUB_REPOSITORY","reybyoo-maker/ai-prospecting-agency")
