@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.3";
+const CODE_VERSION = "2026-10-07.4";
 
 const HEADERS = [
   "Lead ID","Tanggal ditemukan","Nama bisnis","Email","Sumber email","Website","Social",
@@ -414,7 +414,8 @@ function handleTikTokWebhook_(body){
       const messageId=String(content.message_id||"");
       const text=String(tiktokMessageText_(content)||"").trim();
       const fromId=String((content.from_user&&content.from_user.id)||content.from||"");
-      if(conversationId && text && !content.from_user?.role==="business_account"){
+      const fromRole=String((content.from_user&&content.from_user.role)||"personal_account");
+      if(conversationId && text && fromRole!=="business_account"){
         const msg=socialReplyText_("TikTok",tiktokUserName_(content));
         const result=tiktokSendDm_(conversationId,msg);
         dmSent++;
@@ -471,47 +472,6 @@ function sendInstagramPrivateReply_(commentId,text){
   });
 }
 
-function handleInstagramWebhook_(body){
-  let processed=0,matched=0,dmSent=0,errors=0;
-  const entries=Array.isArray(body&&body.entry)?body.entry:[];
-  entries.forEach(function(entry){
-    const changes=Array.isArray(entry&&entry.changes)?entry.changes:[];
-    changes.forEach(function(change){
-      if(String(change.field||"").toLowerCase()!=="comments")return;
-      const v=change.value||{}, commentId=String(v.id||v.comment_id||""), text=String(v.text||"");
-      const from=v.from||{}, userId=String(from.id||""), username=String(from.username||from.name||"");
-      const media=v.media||{}, postId=String(media.id||v.media_id||"");
-      processed++;
-      if(!commentId||!commentMatchesKeyword_(text)||socialCommentExists_(commentId))return;
-      matched++;
-      const wa=socialWaLink_(username||"Instagram lead");
-      let dmStatus="NO_WA_NUMBER",note="Keyword cocok; WA_NUMBER belum diatur.";
-      if(wa){
-        try{
-          const msg="Halo "+(username?"@"+username:"")+"! 👋 Makasih sudah komen REY MAU. Kalau mau lanjut dan minta detail jasanya, langsung chat WhatsApp di sini:\n"+wa;
-          const result=sendInstagramPrivateReply_(commentId,msg);
-          dmStatus="DM_SENT"; note=JSON.stringify(result).slice(0,800); dmSent++;
-        }catch(err){
-          dmStatus="DM_ERROR"; note=String(err).slice(0,800); errors++;
-        }
-      }
-      logSocialLead_({
-        "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-        "Platform":"Instagram",
-        "Keyword":PropertiesService.getScriptProperties().getProperty("IG_COMMENT_KEYWORD")||"REY MAU",
-        "Username":username,
-        "User ID":userId,
-        "Comment ID":commentId,
-        "Comment":text,
-        "Post ID":postId,
-        "DM Status":dmStatus,
-        "WhatsApp Link":wa,
-        "Catatan":note
-      });
-    });
-  });
-  return json_({ok:true,processed:processed,matched:matched,dm_sent:dmSent,errors:errors});
-}
 
 function contentPlanningSheet_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
