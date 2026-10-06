@@ -273,16 +273,34 @@ Return JSON only.
     raise RuntimeError(str(last))
 
 def sheet_call(action,**payload):
-    r=requests.post(
-        SHEET_WEBHOOK_URL,
-        json={"token":WEBHOOK_TOKEN,"action":action,**payload},
-        timeout=90
-    )
-    r.raise_for_status()
-    data=r.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("error","Sheets action failed"))
-    return data
+    last_error=None
+    for attempt in range(3):
+        try:
+            r=requests.post(
+                SHEET_WEBHOOK_URL,
+                json={"token":WEBHOOK_TOKEN,"action":action,**payload},
+                timeout=90
+            )
+            if r.status_code == 404:
+                raise RuntimeError(
+                    "SHEET_WEBHOOK_404: Google Apps Script Web App URL in GitHub Secret "
+                    "is unavailable. Update SHEET_WEBHOOK_URL with the current /exec deployment URL."
+                )
+            if r.status_code in (429,500,502,503,504):
+                last_error=RuntimeError(f"Sheets HTTP {r.status_code}")
+                time.sleep(2*(attempt+1))
+                continue
+            r.raise_for_status()
+            data=r.json()
+            if not data.get("ok"):
+                raise RuntimeError(data.get("error","Sheets action failed"))
+            return data
+        except Exception as e:
+            last_error=e
+            if attempt < 2:
+                time.sleep(2*(attempt+1))
+                continue
+            raise last_error
 
 def make_id(email):
     return hashlib.sha1(email.lower().encode()).hexdigest()[:12]
