@@ -21,5 +21,5 @@ jobs:
           SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
           WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
           GEMINI_MODEL: "gemini-3.5-flash-lite"
-          EXPECTED_APPS_SCRIPT_VERSION: "2026-10-07.4"
+          EXPECTED_APPS_SCRIPT_VERSION: "2026-10-07.5"
         run: python healthcheck.py
