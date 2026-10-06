@@ -1,6 +1,7 @@
 name: Sonjaya 24x7 AI Sales Engine
 
 on:
+  push:
   workflow_dispatch:
   schedule:
     - cron: "17 */2 * * *"
