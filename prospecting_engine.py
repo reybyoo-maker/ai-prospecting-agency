@@ -17,6 +17,14 @@ WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
 MAX_PER_RUN = int(os.getenv("MAX_PER_RUN", "60"))
 MAX_AI_PER_RUN = int(os.getenv("MAX_AI_PER_RUN", "40"))
 SEND_LIMIT = int(os.getenv("SEND_LIMIT", "20"))
+SEARCH_BACKENDS = os.getenv("SEARCH_BACKENDS", "google,brave,bing,duckduckgo").strip()
+SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", "25"))
+QUERY_PAUSE = float(os.getenv("QUERY_PAUSE", "0.6"))
+CONTACT_PATHS = (
+    "/contact", "/kontak", "/hubungi-kami", "/hubungi",
+    "/about", "/tentang-kami", "/tentang"
+)
+
 
 CITIES = [
     "Jakarta","Bandung","Bekasi","Depok","Tangerang","Bogor","Semarang","Yogyakarta",
@@ -37,19 +45,20 @@ NICHES = [
 ]
 
 SOURCE_TEMPLATES = [
-    '"{n}" "{c}" business contact email',
-    '"{n}" "{c}" "contact us" email',
-    '"{n}" "{c}" "hubungi kami" email',
-    'site:instagram.com "{n}" "{c}" email',
-    'site:instagram.com "{n}" "{c}" "@"',
-    'site:tiktok.com "{n}" "{c}" email',
-    'site:linkedin.com/company "{n}" "{c}" email',
-    'site:facebook.com "{n}" "{c}" email',
-    'site:*.id "{n}" "{c}" contact email',
+    '"{n}" "{c}" email',
+    '"{n}" "{c}" "hubungi kami"',
+    '"{n}" "{c}" "contact us"',
+    '"{n}" "{c}" "kontak"',
     '"{n}" "{c}" "gmail.com"',
     '"{n}" "{c}" "admin@"',
     '"{n}" "{c}" "info@"',
-    '"{n}" "{c}" "marketing@"'
+    '"{n}" "{c}" "marketing@"',
+    '"{n}" "{c}" "sales@"',
+    '"{n}" "{c}" "whatsapp"',
+    '"{n}" "{c}" "{n}" "email"',
+    '"{n}" "{c}" company profile',
+    '"{n}" "{c}" business profile',
+    '"{n}" "{c}" website contact'
 ]
 
 EMAIL_RE = re.compile(
@@ -173,18 +182,72 @@ def extract_social(text):
 def search_queries():
     now=datetime.now(WIB)
     slot=(now.timetuple().tm_yday*24+now.hour)//2
-    pool=[template.format(n=n,c=c) for c in CITIES for n in NICHES for template in SOURCE_TEMPLATES]
-    count=int(os.getenv("QUERIES_PER_RUN","18"))
-    return [pool[(slot*count+i)%len(pool)] for i in range(count)]
+    pool=[
+        template.format(n=n,c=c)
+        for c in CITIES
+        for n in NICHES
+        for template in SOURCE_TEMPLATES
+    ]
+    count=int(os.getenv("QUERIES_PER_RUN","24"))
+    start=(slot*count)%len(pool)
+    return [pool[(start+i)%len(pool)] for i in range(count)]
+
+def candidate_urls(url):
+    if not url or is_social_url(url):
+        return []
+    parsed=urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return []
+    base=f"{parsed.scheme}://{parsed.netloc}"
+    return [url, *[base+p for p in CONTACT_PATHS]]
+
+def enrich_candidate(url, evidence):
+    combined=norm(evidence)
+    found_email=extract_email(combined)
+    best_url=url
+    if found_email:
+        return combined, found_email, best_url
+    for target in candidate_urls(url):
+        page_text,page_email=page_evidence(target)
+        if page_text:
+            combined=norm(f"{combined} {page_text[:5000]}")
+        if page_email:
+            return combined, page_email, target
+        time.sleep(0.15)
+    return combined, "", best_url
+
+def search_with_fallback(ddgs, query):
+    backends=[x.strip() for x in SEARCH_BACKENDS.split(",") if x.strip()]
+    last_error=None
+    for backend in backends:
+        try:
+            results=ddgs.text(
+                query,
+                region="id-id",
+                safesearch="moderate",
+                max_results=10,
+                backend=backend,
+            )
+            if results:
+                return results, backend
+        except Exception as e:
+            last_error=e
+            print("BACKEND_ERROR",backend,type(e).__name__,e)
+    if last_error:
+        raise last_error
+    return [], "none"
 
 def discover():
     found={}
     queries=search_queries()
-    with DDGS(timeout=20) as ddgs:
+    stats={"queries":len(queries),"query_errors":0,"backend_successes":0,"candidates":0,"emails":0}
+    with DDGS(timeout=SEARCH_TIMEOUT) as ddgs:
         for qi,q in enumerate(queries,1):
             try:
-                results=ddgs.text(q,region="id-id",safesearch="moderate",max_results=8)
+                results,backend=search_with_fallback(ddgs,q)
+                stats["backend_successes"]+=1
                 for r in results:
+                    stats["candidates"]+=1
                     url=norm(r.get("href") or r.get("url") or r.get("link"))
                     title=norm(r.get("title"))
                     snippet=norm(r.get("body") or r.get("snippet") or r.get("description"))
@@ -192,32 +255,33 @@ def discover():
                         continue
 
                     evidence=norm(f"{title} {snippet}")
-                    email=extract_email(evidence)
-                    page_text=""
-                    if not email and not is_social_url(url):
-                        page_text,email=page_evidence(url)
-                        evidence=norm(f"{evidence} {page_text[:4000]}")
+                    evidence,email,email_url=enrich_candidate(url,evidence)
                     if not email:
                         continue
-
-                    if email.lower() in found:
+                    stats["emails"]+=1
+                    key=email.lower()
+                    if key in found:
                         continue
 
                     social=extract_social(evidence)
-                    found[email.lower()]={
+                    found[key]={
                         "recipient_email":email,
-                        "email_source_url":url,
+                        "email_source_url":email_url or url,
                         "website_url":"" if is_social_url(url) else url,
                         "social_url":social,
                         "search_title":title,
                         "public_evidence":evidence[:7000],
                         "source_query":q,
+                        "search_backend":backend,
                     }
                     if len(found)>=MAX_PER_RUN:
+                        print("DISCOVERY_STATS",json.dumps(stats,ensure_ascii=False))
                         return list(found.values())
             except Exception as e:
+                stats["query_errors"]+=1
                 print("SEARCH_ERROR",qi,type(e).__name__,e)
-            time.sleep(1.2)
+            time.sleep(QUERY_PAUSE)
+    print("DISCOVERY_STATS",json.dumps(stats,ensure_ascii=False))
     return list(found.values())
 
 def score_one(lead):
@@ -332,7 +396,7 @@ def run():
               "subject":f"[SJ-{make_id(lead['recipient_email'])}] {ai['subject']}"[:245],
               "body":ai["body"],
               "status":"READY" if score>=75 else "REVIEW",
-              "catatan":"public business email; initial email requires MANUAL SEND"
+              "catatan":"public business email; source="+lead.get("search_backend","unknown")+"; initial email requires MANUAL SEND"
             })
         except Exception as e:
             print("AI_ERROR",i,type(e).__name__,e)
