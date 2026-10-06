@@ -2,3 +2,4 @@ beautifulsoup4>=4.13.4
 ddgs>=9.10.0
 requests>=2.32.0
 google-genai>=1.0.0
+Pillow>=11.0.0
