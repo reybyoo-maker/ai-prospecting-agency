@@ -19,4 +19,6 @@ jobs:
         run: |
           python -m py_compile             prospecting_engine.py             service_catalog.py             social_content.py             content_runner.py             social_dispatch.py             main.py             prospector.py             gemini_scorer.py             email_sender.py
       - name: Apps Script JavaScript syntax
-        run: node --check apps-script/Code.gs
+        run: |
+          cp apps-script/Code.gs /tmp/Code.gs.js
+          node --check /tmp/Code.gs.js
