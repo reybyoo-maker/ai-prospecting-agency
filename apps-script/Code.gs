@@ -4,13 +4,18 @@ const MAX_ATTEMPTS = 3;
 const DAILY_SEND_LIMIT = 20;
 const MAX_FOLLOWUPS_PER_RUN = 5;
 const AGENCY_NAME = "Sonjaya Remote Business Services";
+const MANUAL_SEND_COL = "Manual Send";
+const SEND_RESULT_COL = "Send Result";
+const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result","Carousel PDF URL","Carousel Cover URL","Slides JSON","Publish Mode"];
+const SOCIAL_LEADS_SHEET = "Social Leads";
+const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
 
 const HEADERS = [
   "Lead ID","Tanggal ditemukan","Nama bisnis","Email","Sumber email","Website","Social",
   "Kota","Kategori","Bukti publik","Skor","Prioritas","Kebutuhan terdeteksi",
   "Layanan direkomendasikan","Pain point","Hook personal","Subject","Body","Status",
   "Sent At","Follow-up 1 At","Follow-up 2 At","Follow-up 3 At","Reply At","Reply Intent",
-  "Last Reply","WhatsApp Handoff","Attempts","Last Error","Opt Out","Catatan"
+  "Last Reply","WhatsApp Handoff","Attempts","Last Error","Opt Out","Catatan","Manual Send","Send Result"
 ];
 
 function sheet_(){
@@ -21,6 +26,7 @@ function sheet_(){
   sh.setFrozenRows(1);
   sh.getRange(1,1,1,HEADERS.length).setFontWeight("bold");
   sh.getDataRange().setWrap(true);
+  configureProspectControls_(sh);
   return sh;
 }
 
@@ -37,11 +43,122 @@ function ensureHeaders_(sh, headers){
   });
 }
 
+function configureProspectControls_(sh){
+  const manualCol=col_("Manual Send");
+  if(manualCol<1)return;
+  const rows=Math.max(sh.getMaxRows()-1,100);
+  sh.getRange(2,manualCol,rows,1)
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build())
+    .setHorizontalAlignment("center");
+  const statusCol=col_("Status");
+  if(statusCol>0){
+    sh.getRange(2,statusCol,rows,1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(
+        ["READY","REVIEW","SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF","OPTOUT","ERROR","FAILED"], true
+      ).build()
+    );
+  }
+}
+
+function socialLeadsSheet_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  let sh=ss.getSheetByName(SOCIAL_LEADS_SHEET);
+  if(!sh)sh=ss.insertSheet(SOCIAL_LEADS_SHEET);
+  ensureHeaders_(sh,SOCIAL_LEADS_HEADERS);
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,SOCIAL_LEADS_HEADERS.length).setFontWeight("bold");
+  sh.getDataRange().setWrap(true);
+  return sh;
+}
+
+function colSocial_(name){return SOCIAL_LEADS_HEADERS.indexOf(name)+1;}
+
+function normalizeKeyword_(s){
+  return String(s||"").toUpperCase().replace(/[^A-Z0-9]+/g," ").replace(/\s+/g," ").trim();
+}
+
+function commentMatchesKeyword_(text){
+  const keyword=PropertiesService.getScriptProperties().getProperty("IG_COMMENT_KEYWORD")||"REY MAU";
+  const hay=normalizeKeyword_(text), needle=normalizeKeyword_(keyword);
+  return Boolean(needle && (hay===needle || hay.indexOf(needle)!==-1));
+}
+
+function socialCommentExists_(commentId){
+  if(!commentId)return false;
+  const sh=socialLeadsSheet_(),last=sh.getLastRow();
+  if(last<2)return false;
+  return sh.getRange(2,colSocial_("Comment ID"),last-1,1).getValues()
+    .some(r=>String(r[0]||"")===String(commentId));
+}
+
+function logSocialLead_(row){
+  const sh=socialLeadsSheet_();
+  const o=SOCIAL_LEADS_HEADERS.map(h=>row[h]||"");
+  sh.appendRow(o);
+}
+
+function sendInstagramPrivateReply_(commentId,text){
+  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
+  const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
+  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
+  const host=PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com";
+  if(!token||!igUserId)throw new Error("INSTAGRAM_MESSAGING_NOT_CONFIGURED");
+  return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(igUserId)+"/messages",{
+    method:"post",
+    contentType:"application/json",
+    headers:{Authorization:"Bearer "+token},
+    payload:JSON.stringify({recipient:{comment_id:String(commentId)},message:{text:String(text||"").slice(0,1000)}}),
+    muteHttpExceptions:true
+  });
+}
+
+function handleInstagramWebhook_(body){
+  let processed=0,matched=0,dmSent=0,errors=0;
+  const entries=Array.isArray(body&&body.entry)?body.entry:[];
+  entries.forEach(function(entry){
+    const changes=Array.isArray(entry&&entry.changes)?entry.changes:[];
+    changes.forEach(function(change){
+      if(String(change.field||"").toLowerCase()!=="comments")return;
+      const v=change.value||{}, commentId=String(v.id||v.comment_id||""), text=String(v.text||"");
+      const from=v.from||{}, userId=String(from.id||""), username=String(from.username||from.name||"");
+      const media=v.media||{}, postId=String(media.id||v.media_id||"");
+      processed++;
+      if(!commentId||!commentMatchesKeyword_(text)||socialCommentExists_(commentId))return;
+      matched++;
+      const wa=waLink_(username||"Instagram lead",username||"");
+      let dmStatus="NO_WA_NUMBER",note="Keyword cocok; WA_NUMBER belum diatur.";
+      if(wa){
+        try{
+          const msg="Halo "+(username?"@"+username:"")+"! 👋 Makasih sudah komen REY MAU. Kalau mau lanjut dan minta detail jasanya, langsung chat WhatsApp di sini:\n"+wa;
+          const result=sendInstagramPrivateReply_(commentId,msg);
+          dmStatus="DM_SENT"; note=JSON.stringify(result).slice(0,800); dmSent++;
+        }catch(err){
+          dmStatus="DM_ERROR"; note=String(err).slice(0,800); errors++;
+        }
+      }
+      logSocialLead_({
+        "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+        "Platform":"Instagram",
+        "Keyword":PropertiesService.getScriptProperties().getProperty("IG_COMMENT_KEYWORD")||"REY MAU",
+        "Username":username,
+        "User ID":userId,
+        "Comment ID":commentId,
+        "Comment":text,
+        "Post ID":postId,
+        "DM Status":dmStatus,
+        "WhatsApp Link":wa,
+        "Catatan":note
+      });
+    });
+  });
+  return json_({ok:true,processed:processed,matched:matched,dm_sent:dmSent,errors:errors});
+}
+
 function contentSheet_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
   let sh=ss.getSheetByName(CONTENT_SHEET);
   if(!sh) sh=ss.insertSheet(CONTENT_SHEET);
-  const h=["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
+  const h=CONTENT_HEADERS;
   ensureHeaders_(sh,h);
   sh.setFrozenRows(1);
   sh.getRange(1,1,1,h.length).setFontWeight("bold");
@@ -64,6 +181,81 @@ function waLink_(business,email){
   return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
 }
 
+function onOpen(){
+  SpreadsheetApp.getUi().createMenu("Sonjaya")
+    .addItem("Kirim Lead Terpilih","sendSelectedRows_")
+    .addItem("Pasang Kontrol Manual Send","setup")
+    .addToUi();
+}
+
+function onEdit(e){
+  try{
+    if(!e||!e.range)return;
+    const sh=e.range.getSheet();
+    if(sh.getName()!==SHEET_NAME)return;
+    const manualCol=col_("Manual Send");
+    if(manualCol<1||e.range.getColumn()>manualCol||e.range.getLastColumn()<manualCol)return;
+    if(String(e.value||"").toUpperCase()!=="TRUE")return;
+    for(let row=e.range.getRow();row<=e.range.getLastRow();row++)sendOneRow_(row);
+  }catch(err){console.log(err);}
+}
+
+function scheduleAfterManualSend_(rowNum,first){
+  const sh=sheet_();
+  sh.getRange(rowNum,col_("Sent At")).setValue(first);
+  sh.getRange(rowNum,col_("Follow-up 1 At")).setValue(new Date(first.getTime()+2*86400000));
+  sh.getRange(rowNum,col_("Follow-up 2 At")).setValue(new Date(first.getTime()+5*86400000));
+  sh.getRange(rowNum,col_("Follow-up 3 At")).setValue(new Date(first.getTime()+9*86400000));
+}
+
+function sendOneRow_(rowNum){
+  const lock=LockService.getDocumentLock();
+  lock.waitLock(15000);
+  try{
+    const sh=sheet_();
+    if(rowNum<2||rowNum>sh.getLastRow())return {ok:false,error:"Invalid row"};
+    const email=String(sh.getRange(rowNum,col_("Email")).getValue()||"").trim();
+    const subject=String(sh.getRange(rowNum,col_("Subject")).getValue()||"").trim();
+    const body=String(sh.getRange(rowNum,col_("Body")).getValue()||"").trim();
+    const opt=String(sh.getRange(rowNum,col_("Opt Out")).getValue()||"").toUpperCase().trim();
+    const status=String(sh.getRange(rowNum,col_("Status")).getValue()||"").toUpperCase().trim();
+    if(opt==="YES")throw new Error("OPT_OUT");
+    if(["SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF"].indexOf(status)>=0){
+      sh.getRange(rowNum,col_(MANUAL_SEND_COL)).setValue(false);
+      return {ok:false,error:"Already sent or handled"};
+    }
+    if(!email||!subject||!body)throw new Error("Email, Subject, dan Body wajib terisi sebelum kirim.");
+    MailApp.sendEmail({to:email,subject:subject,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
+    const first=now_();
+    sh.getRange(rowNum,col_("Status")).setValue("SENT");
+    scheduleAfterManualSend_(rowNum,first);
+    sh.getRange(rowNum,col_("Last Error")).clearContent();
+    sh.getRange(rowNum,col_(MANUAL_SEND_COL)).setValue(false);
+    sh.getRange(rowNum,col_(SEND_RESULT_COL)).setValue("SENT "+Utilities.formatDate(first,"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
+    return {ok:true,row:rowNum,email:email};
+  }catch(err){
+    const sh=sheet_();
+    const attemptsCell=sh.getRange(rowNum,col_("Attempts")), attempts=Number(attemptsCell.getValue()||0)+1;
+    attemptsCell.setValue(attempts);
+    sh.getRange(rowNum,col_("Status")).setValue(attempts>=MAX_ATTEMPTS?"FAILED":"ERROR");
+    sh.getRange(rowNum,col_("Last Error")).setValue(String(err).slice(0,1000));
+    sh.getRange(rowNum,col_(MANUAL_SEND_COL)).setValue(false);
+    sh.getRange(rowNum,col_(SEND_RESULT_COL)).setValue("ERROR: "+String(err).slice(0,500));
+    return {ok:false,row:rowNum,error:String(err)};
+  }finally{
+    try{lock.releaseLock();}catch(e){}
+  }
+}
+
+function sendSelectedRows_(){
+  const sh=sheet_(),range=sh.getActiveRange();
+  if(!range)return;
+  const results=[];
+  for(let row=range.getRow();row<=range.getLastRow();row++)results.push(sendOneRow_(row));
+  const ok=results.filter(r=>r&&r.ok).length;
+  SpreadsheetApp.getUi().alert(ok+" lead berhasil dikirim. Lead lain yang belum lengkap/tidak eligible tidak dikirim.");
+}
+
 function doGet(e){
   const p=(e&&e.parameter)||{};
   const verify=PropertiesService.getScriptProperties().getProperty("META_VERIFY_TOKEN")||"";
@@ -76,6 +268,7 @@ function doGet(e){
 function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
+    if(body && body.object==="instagram")return handleInstagramWebhook_(body);
     if(!auth_(body))return json_({ok:false,error:"Unauthorized"});
     const a=body.action||"ingest";
     if(a==="ingest")return ingest_(body.rows||[]);
@@ -113,7 +306,13 @@ function ingest_(rows){
     set("Pain point",row.pain_point); set("Hook personal",row.alasan);
     set("Subject",row.subject); set("Body",row.body); set("Status",row.status||"REVIEW");
     set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
-    sh.appendRow(o); existing[email]=true; added++;
+    set("Manual Send",false); set("Send Result","WAITING_FOR_MANUAL_SEND");
+    sh.appendRow(o);
+    const newRow=sh.getLastRow();
+    sh.getRange(newRow,col_("Manual Send"))
+      .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build())
+      .setValue(false);
+    existing[email]=true; added++;
   });
   return json_({ok:true,received:rows.length,added:added,duplicates:duplicates,no_email:noEmail});
 }
@@ -149,44 +348,7 @@ function outboundToday_(values,idx){
 }
 
 function sendQueue_(limit){
-  const sh=sheet_(),last=sh.getLastRow();
-  if(last<2)return json_({ok:true,sent_today:0,sent:0,remaining:0,gmail_quota:MailApp.getRemainingDailyQuota()});
-  limit=Math.max(1,Math.min(limit||DAILY_SEND_LIMIT,DAILY_SEND_LIMIT));
-  const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
-  const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
-  const sentToday=outboundToday_(values,idx);
-  const q=[];
-  values.forEach(function(r){
-    const status=String(r[idx["Status"]]||"").toUpperCase().trim();
-    const opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
-    if(status!=="READY"||opt==="YES")return;
-    const email=String(r[idx["Email"]]||"").trim(),subject=String(r[idx["Subject"]]||"").trim(),body=String(r[idx["Body"]]||"").trim();
-    const attempts=Number(r[idx["Attempts"]]||0);
-    if(!email||!subject||!body||attempts>=MAX_ATTEMPTS)return;
-    q.push({leadId:String(r[idx["Lead ID"]]||""),email,subject,body,score:Number(r[idx["Skor"]]||0)});
-  });
-  q.sort(function(a,b){return b.score-a.score;});
-  const remaining=Math.max(0,Math.min(MailApp.getRemainingDailyQuota(),DAILY_SEND_LIMIT-sentToday));
-  const selected=q.slice(0,Math.min(limit,remaining));
-  let sent=0;
-  selected.forEach(function(x){
-    try{
-      MailApp.sendEmail({to:x.email,subject:x.subject,body:x.body,name:AGENCY_NAME,replyTo:ownerEmail_()});
-      const row=findRowById_(x.leadId);
-      if(row>1){
-        const first=now_();
-        sh.getRange(row,col_("Status")).setValue("SENT");
-        sh.getRange(row,col_("Sent At")).setValue(first);
-        sh.getRange(row,col_("Follow-up 1 At")).setValue(new Date(first.getTime()+2*86400000));
-        sh.getRange(row,col_("Follow-up 2 At")).setValue(new Date(first.getTime()+5*86400000));
-        sh.getRange(row,col_("Follow-up 3 At")).setValue(new Date(first.getTime()+9*86400000));
-        sh.getRange(row,col_("Last Error")).clearContent();
-      }
-      sent++;
-      Utilities.sleep(1200);
-    }catch(err){markError_(x.leadId,String(err));}
-  });
-  return json_({ok:true,sent_today:sentToday+sent,sent:sent,remaining:Math.max(0,DAILY_SEND_LIMIT-sentToday-sent),gmail_quota:MailApp.getRemainingDailyQuota()});
+  return json_({ok:true,auto_send:false,sent:0,message:"Automatic initial email sending is disabled. Use Manual Send in the Prospects sheet."});
 }
 
 function findThreadByLeadId_(id){
@@ -313,7 +475,13 @@ function ingestContent_(rows){
   rows.forEach(function(r){
     const key=String(r.date)+"|"+String(r.platform)+"|"+String(r.topic);
     if(existing[key])return;
-    sh.appendRow([r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,r.asset_url||"",r.status||"PLANNED",""]);
+    sh.appendRow([
+      r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,
+      r.asset_url||r.carousel_cover_url||"",r.status||"PLANNED",
+      r.publish_result||"NOT_UPLOADED",
+      r.carousel_pdf_url||"",r.carousel_cover_url||"",
+      r.slides_json||"",r.publish_mode||"PLANNING_ONLY"
+    ]);
     existing[key]=true;added++;
   });
   return json_({ok:true,added:added});
@@ -458,7 +626,7 @@ function markContentPublished_(date,platform,result){
 }
 
 function setup(){
-  sheet_();contentSheet_();
+  sheet_();contentSheet_();socialLeadsSheet_();
   const triggers=ScriptApp.getProjectTriggers();
   if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
     ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
