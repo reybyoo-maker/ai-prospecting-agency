@@ -24,6 +24,8 @@ CONTACT_PATHS = (
     "/contact", "/kontak", "/hubungi-kami", "/hubungi",
     "/about", "/tentang-kami", "/tentang"
 )
+MAX_CRAWL_PER_QUERY = int(os.getenv("MAX_CRAWL_PER_QUERY", "3"))
+MAX_EMAIL_RESULTS_PER_QUERY = int(os.getenv("MAX_EMAIL_RESULTS_PER_QUERY", "6"))
 
 
 CITIES = [
@@ -246,6 +248,8 @@ def discover():
             try:
                 results,backend=search_with_fallback(ddgs,q)
                 stats["backend_successes"]+=1
+                crawl_count=0
+                email_results=0
                 for r in results:
                     stats["candidates"]+=1
                     url=norm(r.get("href") or r.get("url") or r.get("link"))
@@ -255,10 +259,15 @@ def discover():
                         continue
 
                     evidence=norm(f"{title} {snippet}")
-                    evidence,email,email_url=enrich_candidate(url,evidence)
+                    email=extract_email(evidence)
+                    email_url=url
+                    if not email and crawl_count < MAX_CRAWL_PER_QUERY and not is_social_url(url):
+                        crawl_count+=1
+                        evidence,email,email_url=enrich_candidate(url,evidence)
                     if not email:
                         continue
                     stats["emails"]+=1
+                    email_results+=1
                     key=email.lower()
                     if key in found:
                         continue
@@ -277,6 +286,8 @@ def discover():
                     if len(found)>=MAX_PER_RUN:
                         print("DISCOVERY_STATS",json.dumps(stats,ensure_ascii=False))
                         return list(found.values())
+                    if email_results >= MAX_EMAIL_RESULTS_PER_QUERY:
+                        break
             except Exception as e:
                 stats["query_errors"]+=1
                 print("SEARCH_ERROR",qi,type(e).__name__,e)
