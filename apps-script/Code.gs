@@ -2,7 +2,6 @@ const SHEET_NAME = "Prospects";
 const CONTENT_SHEET = "Content";
 const MAX_ATTEMPTS = 3;
 const DAILY_SEND_LIMIT = 20;
-const WA_NUMBER = "6287813871926";
 const AGENCY_NAME = "Sonjaya Remote Business Services";
 
 const HEADERS = [
@@ -41,8 +40,10 @@ function auth_(body){
 }
 function ownerEmail_(){return String(Session.getEffectiveUser().getEmail()||"").toLowerCase();}
 function waLink_(business,email){
+  const number=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/D/g,"");
+  if(!number) return "";
   const text="Halo Rey, saya dari "+business+". Saya membalas email tentang kebutuhan bisnis kami. Email: "+email;
-  return "https://wa.me/"+WA_NUMBER+"?text="+encodeURIComponent(text);
+  return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
 }
 function doGet(){return json_({ok:true,service:"Sonjaya Remote Agency",status:"running"});}
 
@@ -74,12 +75,12 @@ function ingest_(rows){
     if(existing[email]){duplicates++;return;}
     const o=new Array(HEADERS.length).fill("");
     const set=(h,v)=>o[col_(h)-1]=v==null?"":v;
+    const score=Number(row.skor||0);
     set("Lead ID",row.lead_id||Utilities.getUuid().replace(/-/g,"").slice(0,12));
     set("Tanggal ditemukan",row.tanggal_ditemukan||Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
     set("Nama bisnis",row.nama_bisnis); set("Email",email); set("Sumber email",row.email_source_url);
     set("Website",row.website_url); set("Social",row.social_url); set("Kota",row.kota); set("Kategori",row.kategori);
-    set("Bukti publik",row.bukti_publik); set("Skor",Number(row.skor||0));
-    set("Prioritas",Number(row.skor||0)>=85?"A":Number(row.skor||0)>=75?"B":"C");
+    set("Bukti publik",row.bukti_publik); set("Skor",score); set("Prioritas",score>=85?"A":score>=75?"B":"C");
     set("Kebutuhan terdeteksi",row.detected_need); set("Layanan direkomendasikan",row.recommended_service);
     set("Pain point",row.pain_point); set("Hook personal",row.alasan); set("Subject",row.subject); set("Body",row.body);
     set("Status",row.status||"REVIEW"); set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
@@ -130,8 +131,7 @@ function sendQueue_(limit){
       MailApp.sendEmail({to:x.email,subject:x.subject,body:x.body,name:AGENCY_NAME});
       const row=findRowById_(x.leadId);
       if(row>1){sh.getRange(row,col_("Status")).setValue("SENT");sh.getRange(row,col_("Sent At")).setValue(now_());sh.getRange(row,col_("Last Error")).clearContent();}
-      sent++;
-      Utilities.sleep(1500);
+      sent++; Utilities.sleep(1500);
     }catch(err){markError_(x.leadId,String(err));}
   });
   return json_({ok:true,sent_today:sentToday+sent,sent:sent,remaining:Math.max(0,DAILY_SEND_LIMIT-sentToday-sent),gmail_quota:MailApp.getRemainingDailyQuota()});
@@ -144,7 +144,7 @@ function scanReplies_(limit){
   const owner=ownerEmail_(); let replied=0;
   for(let ti=0;ti<threads.length&&replied<limit;ti++){
     const thread=threads[ti], subject=String(thread.getFirstMessageSubject()||"");
-    const m=subject.match(/\[SJ-([a-f0-9]{12})\]/i); if(!m)continue;
+    const m=subject.match(/[SJ-([a-f0-9]{12})]/i); if(!m)continue;
     const row=findRowById_(m[1]); if(row<2)continue;
     const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
     if(status==="WA_HANDOFF"||status==="OPTOUT")continue;
@@ -162,9 +162,11 @@ function scanReplies_(limit){
     const email=String(sh.getRange(row,col_("Email")).getValue()||"");
     const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\b/i.test(body)?"INTERESTED":"REPLIED";
     const wa=waLink_(business,email);
-    const replyText="Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\n\nWhatsApp: "+wa+"\n\nSalam,\nRey\n"+AGENCY_NAME;
+    const replyText=wa
+      ? "Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\n\nWhatsApp: "+wa+"\n\nSalam,\nRey\n"+AGENCY_NAME
+      : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\n\nSalam,\nRey\n"+AGENCY_NAME;
     try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
-    sh.getRange(row,col_("Status")).setValue("WA_HANDOFF");
+    sh.getRange(row,col_("Status")).setValue(wa?"WA_HANDOFF":"REPLIED");
     sh.getRange(row,col_("Reply At")).setValue(now_()); sh.getRange(row,col_("Reply Intent")).setValue(intent);
     sh.getRange(row,col_("Last Reply")).setValue(body.slice(0,1500)); sh.getRange(row,col_("WhatsApp Handoff")).setValue(wa);
     replied++;
@@ -173,10 +175,16 @@ function scanReplies_(limit){
 }
 
 function ingestContent_(rows){
-  const sh=contentSheet_();
-  if(!Array.isArray(rows))rows=[];
-  rows.forEach(function(r){sh.appendRow([r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,r.status||"PLANNED"]);});
-  return json_({ok:true,added:rows.length});
+  const sh=contentSheet_(); const existing={};
+  if(sh.getLastRow()>=2) sh.getRange(2,1,sh.getLastRow()-1,3).getValues().forEach(function(r){existing[String(r[0])+"|"+String(r[1])+"|"+String(r[3])] = true;});
+  let added=0;
+  rows.forEach(function(r){
+    const key=String(r.date)+"|"+String(r.platform)+"|"+String(r.topic);
+    if(existing[key])return;
+    sh.appendRow([r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,r.status||"PLANNED"]);
+    existing[key]=true; added++;
+  });
+  return json_({ok:true,added:added});
 }
 
 function setup(){
