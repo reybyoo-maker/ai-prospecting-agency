@@ -6,7 +6,7 @@ Mesin utama sekarang adalah V2: discovery bisnis -> email publik -> AI membaca k
 
 Discovery V2 menggunakan DDGS + halaman web publik, jadi tidak membutuhkan API TinyFish. Gemini API dipakai untuk research/scoring/copy. Pengiriman Gmail dan pembacaan reply dilakukan oleh Google Apps Script menggunakan akun Google yang mengotorisasi script.
 
-Gemini menyediakan Free Tier untuk model yang memenuhi syarat, tetapi tetap memiliki quota/rate limit. Gmail juga mempunyai batas pengiriman harian dan batas penggunaan; V2 sengaja memakai default 20 email/hari. Referensi: Google Gemini pricing dan Gmail usage limits.
+Gemini menyediakan Free Tier untuk model yang memenuhi syarat, tetapi tetap memiliki quota/rate limit. Gmail juga mempunyai batas pengiriman harian dan batas penggunaan; V2 sengaja memakai default 20 email/hari.
 
 ## Yang dilakukan otomatis
 
@@ -38,7 +38,7 @@ Sheet Content disiapkan untuk kalender konten Instagram/TikTok.
 
 ## Social media
 
-social_content.py menghasilkan ide/caption harian untuk Instagram dan TikTok. Metricool yang sudah terhubung bisa membantu penjadwalan dan auto-publish Instagram pada akun business/creator. Namun API Metricool sekarang hanya tersedia pada paket Advanced/Custom, bukan Free/Starter, sehingga integrasi API untuk auto-publish tidak bisa disebut 100% gratis.
+social_content.py menghasilkan ide/caption harian untuk Instagram dan TikTok. Metricool yang sudah terhubung bisa membantu penjadwalan dan auto-publish Instagram pada akun business/creator. Namun API Metricool saat ini hanya tersedia pada paket Advanced/Custom, bukan Free/Starter, sehingga integrasi API untuk auto-publish tidak bisa disebut 100% gratis.
 
 Karena targetmu gratis, V2 tidak memasukkan biaya API Metricool sebagai dependency. Content generator tetap otomatis; publishing dapat memakai scheduler gratis yang tersedia pada akunmu. DM automation penuh tidak dipaksakan lewat password/scraping karena membutuhkan akses platform yang sesuai.
 
@@ -50,10 +50,11 @@ Agar sistem dapat menyentuh akunmu, kamu tetap harus memberikan otorisasi akun.
 2. Extensions -> Apps Script.
 3. Ganti Code.gs dengan apps-script/Code.gs di repo ini.
 4. Jalankan setup() satu kali dan izinkan Gmail + Spreadsheet.
-5. Deploy sebagai Web App dan salin URL-nya.
-6. Set Script Property WEBHOOK_TOKEN.
-7. Di GitHub Secrets, isi GEMINI_API_KEY, SHEET_WEBHOOK_URL, WEBHOOK_TOKEN.
-8. Aktifkan GitHub Actions.
+5. Set Script Property WEBHOOK_TOKEN dengan token acak.
+6. Set Script Property WA_NUMBER dengan nomor WhatsApp bisnis yang akan menerima handoff, format internasional tanpa tanda +.
+7. Deploy sebagai Web App dan salin URL-nya.
+8. Di GitHub Secrets, isi GEMINI_API_KEY, SHEET_WEBHOOK_URL, WEBHOOK_TOKEN.
+9. Aktifkan GitHub Actions.
 
 V2 tidak membutuhkan GMAIL_APP_PASSWORD atau TINYFISH_API_KEY.
 
