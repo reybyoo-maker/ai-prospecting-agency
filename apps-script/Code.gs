@@ -56,7 +56,7 @@ function configureProspectControls_(sh){
   if(statusCol>0){
     sh.getRange(2,statusCol,rows,1).setDataValidation(
       SpreadsheetApp.newDataValidation().requireValueInList(
-        ["READY","REVIEW","SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF","OPTOUT","ERROR","FAILED"], true
+        ["READY","REVIEW","MANUAL_SEND","SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF","OPTOUT","ERROR","FAILED"], true
       ).build()
     );
   }
@@ -215,8 +215,12 @@ function manualSendOnEdit_(e){
     const sh=e.range.getSheet();
     if(sh.getName()!==SHEET_NAME)return;
     const manualCol=col_("Manual Send");
-    if(manualCol<1||e.range.getColumn()>manualCol||e.range.getLastColumn()<manualCol)return;
-    if(String(e.value||"").toUpperCase()!=="TRUE")return;
+    const statusCol=col_("Status");
+    const editedCol=e.range.getColumn();
+    const value=String(e.value||"").toUpperCase().trim();
+    const viaCheckbox=(editedCol===manualCol && value==="TRUE");
+    const viaStatus=(editedCol===statusCol && value==="MANUAL_SEND");
+    if(!viaCheckbox && !viaStatus)return;
     for(let row=e.range.getRow();row<=e.range.getLastRow();row++)sendOneRow_(row);
   }catch(err){console.log(err);}
 }
