@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.5";
+const CODE_VERSION = "2026-10-07.6";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -354,6 +354,23 @@ function tiktokSendCommentDm_(commentId,text){
   },"post");
 }
 
+function tiktokGetComment_(commentId,videoId){
+  const businessId=tiktokBusinessId_();
+  const ids=encodeURIComponent(JSON.stringify([String(commentId)]));
+  const url=tiktokBaseUrl_()+"/business/comment/list/?business_id="+encodeURIComponent(businessId)+
+    "&video_id="+encodeURIComponent(String(videoId))+
+    "&comment_ids="+ids+
+    "&max_count=1";
+  const data=urlFetchJson_(url,{
+    method:"get",
+    headers:{"Access-Token":tiktokToken_()},
+    muteHttpExceptions:true
+  });
+  const list=data&&data.data&&data.data.comments;
+  const item=Array.isArray(list)&&list.length?list[0]:null;
+  return item||null;
+}
+
 function tiktokReplyComment_(videoId,commentId,text){
   return tiktokJson_("/business/comment/reply/create/",{
     business_id:tiktokBusinessId_(),
@@ -384,80 +401,125 @@ function socialEventExists_(eventKey){
 }
 
 function handleTikTokWebhook_(body){
-  let event=String(body.event||body.webhook_event_type||"").toLowerCase();
+  const event=String(body&&body.event||body&&body.webhook_event_type||"").toLowerCase();
   const content=tiktokEventObject_(body);
-  let processed=0,dmSent=0,publicReply=0,errors=0;
-  const eventId=String(body.event_id||body.request_id||content.event_id||content.message_id||content.comment_id||Utilities.getUuid());
+  const eventId=String(body&&body.event_id||body&&body.request_id||content.event_id||content.message_id||content.comment_id||Utilities.getUuid());
   const key=socialEventKey_("tiktok",eventId);
   if(socialEventExists_(key))return json_({ok:true,platform:"tiktok",duplicate:true,event:event});
-  processed=1;
 
+  let dmSent=0,publicReply=0,errors=0;
   try{
-    if(event.indexOf("high_intent_comment")>=0 || event==="im_receive_high_intent_comment"){
+    if(event==="im_receive_high_intent_comment" || event.indexOf("high_intent_comment")>=0){
       const commentId=String(content.comment_id||"");
-      const msg=socialReplyText_("TikTok",tiktokUserName_(content));
+      const username=tiktokUserName_(content);
       if(commentId){
-        const result=tiktokSendCommentDm_(commentId,msg);
+        const result=tiktokSendCommentDm_(commentId,socialReplyText_("TikTok",username));
         dmSent++;
         logSocialLead_({
           "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"TikTok","Keyword":String(content.comment_text||""),
-          "Username":tiktokUserName_(content),"User ID":String(content.unique_identifier||""),
-          "Comment ID":commentId,"Comment":String(content.comment_text||""),
+          "Platform":"TikTok",
+          "Keyword":"HIGH_INTENT",
+          "Username":username,
+          "User ID":String(content.unique_identifier||""),
+          "Comment ID":commentId,
+          "Comment":String(content.comment_text||""),
           "Post ID":String(content.video_id||""),
           "DM Status":"DM_SENT",
-          "WhatsApp Link":socialWaLink_(tiktokUserName_(content)),
+          "WhatsApp Link":socialWaLink_(username),
           "Catatan":"EVENT_KEY="+key+" | "+JSON.stringify(result).slice(0,700)
         });
       }
-    } else if(event.indexOf("receive_message")>=0 || event==="im_receive_message"){
+    } else if(event==="im_receive_message" || event.indexOf("receive_message")>=0){
       const conversationId=String(content.conversation_id||content.conversation||"");
-      const messageId=String(content.message_id||"");
-      const text=String(tiktokMessageText_(content)||"").trim();
-      const fromId=String((content.from_user&&content.from_user.id)||content.from||"");
-      const fromRole=String((content.from_user&&content.from_user.role)||"personal_account");
-      if(conversationId && text && fromRole!=="business_account"){
-        const msg=socialReplyText_("TikTok",tiktokUserName_(content));
-        const result=tiktokSendDm_(conversationId,msg);
+      const textIn=String(tiktokMessageText_(content)||"").trim();
+      const fromUser=content&&content.from_user||{};
+      const fromRole=String(fromUser.role||"personal_account");
+      if(conversationId && textIn && fromRole!=="business_account"){
+        const username=tiktokUserName_(content);
+        const result=tiktokSendDm_(conversationId,socialReplyText_("TikTok",username));
         dmSent++;
         logSocialLead_({
           "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"TikTok","Keyword":"","Username":tiktokUserName_(content),"User ID":fromId,
-          "Comment ID":"","Comment":text,"Post ID":"",
-          "DM Status":"DM_AUTO_REPLY_SENT","WhatsApp Link":socialWaLink_(tiktokUserName_(content)),
-          "Catatan":"EVENT_KEY="+key+" | MESSAGE_ID="+messageId+" | "+JSON.stringify(result).slice(0,700)
-        });
-      }
-    } else if(event.indexOf("comment")>=0 || event==="comment.update"){
-      const commentId=String(content.comment_id||content.id||"");
-      const videoId=String(content.video_id||"");
-      const commentText=String(content.comment_text||content.text||"");
-      if(commentId && videoId && tiktokKeywordMatch_(commentText)){
-        const result=tiktokReplyComment_(videoId,commentId,"Siap! 👋 Gue kirim info lanjut lewat DM kalau akun ini eligible untuk Comment-to-Message. Cek Inbox ya.");
-        publicReply++;
-        logSocialLead_({
-          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"TikTok","Keyword":PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU",
-          "Username":tiktokUserName_(content),"User ID":String(content.unique_identifier||""),
-          "Comment ID":commentId,"Comment":commentText,"Post ID":videoId,
-          "DM Status":"PUBLIC_REPLY_SENT","WhatsApp Link":socialWaLink_(tiktokUserName_(content)),
+          "Platform":"TikTok",
+          "Keyword":"",
+          "Username":username,
+          "User ID":String(fromUser.id||""),
+          "Comment ID":"",
+          "Comment":textIn,
+          "Post ID":"",
+          "DM Status":"DM_AUTO_REPLY_SENT",
+          "WhatsApp Link":socialWaLink_(username),
           "Catatan":"EVENT_KEY="+key+" | "+JSON.stringify(result).slice(0,700)
         });
+      }
+    } else if(event==="comment.update" || event.indexOf("comment")>=0){
+      const commentId=String(content.comment_id||content.id||"");
+      const videoId=String(content.video_id||content.item_id||"");
+      let commentText=String(content.comment_text||content.text||"").trim();
+      const action=String(content.comment_action||content.action||"").toLowerCase();
+
+      // TikTok comment.update webhook does not include comment text.
+      if(!commentText && commentId && videoId && action!=="delete"){
+        const item=tiktokGetComment_(commentId,videoId);
+        commentText=String(item&&item.text||"").trim();
+      }
+      if(commentId && videoId && commentText && tiktokKeywordMatch_(commentText)){
+        const username=tiktokUserName_(content);
+        const msg=socialReplyText_("TikTok",username);
+        const dmResult=tiktokSendCommentDm_(commentId,msg);
+        dmSent++;
+        let publicText="Siap! 👋 Cek DM ya, gue kirim info lanjut.";
+        try{
+          const publicResult=tiktokReplyComment_(videoId,commentId,publicText);
+          publicReply++;
+          logSocialLead_({
+            "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+            "Platform":"TikTok",
+            "Keyword":PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU",
+            "Username":username,
+            "User ID":String(content.unique_identifier||""),
+            "Comment ID":commentId,
+            "Comment":commentText,
+            "Post ID":videoId,
+            "DM Status":"DM_SENT_PUBLIC_REPLY_SENT",
+            "WhatsApp Link":socialWaLink_(username),
+            "Catatan":"EVENT_KEY="+key+" | DM="+JSON.stringify(dmResult).slice(0,500)+" | PUBLIC="+JSON.stringify(publicResult).slice(0,500)
+          });
+        }catch(publicErr){
+          logSocialLead_({
+            "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+            "Platform":"TikTok",
+            "Keyword":PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU",
+            "Username":username,
+            "User ID":String(content.unique_identifier||""),
+            "Comment ID":commentId,
+            "Comment":commentText,
+            "Post ID":videoId,
+            "DM Status":"DM_SENT_PUBLIC_REPLY_ERROR",
+            "WhatsApp Link":socialWaLink_(username),
+            "Catatan":"EVENT_KEY="+key+" | DM="+JSON.stringify(dmResult).slice(0,500)+" | PUBLIC_ERROR="+String(publicErr).slice(0,500)
+          });
+        }
       }
     }
   }catch(err){
     errors++;
     logSocialLead_({
       "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-      "Platform":"TikTok","Keyword":"","Username":tiktokUserName_(content),"User ID":"",
-      "Comment ID":String(content.comment_id||""),"Comment":String(content.comment_text||content.text||""),
-      "Post ID":String(content.video_id||""),"DM Status":"AUTOMATION_ERROR","WhatsApp Link":"",
+      "Platform":"TikTok",
+      "Keyword":"",
+      "Username":tiktokUserName_(content),
+      "User ID":String(content.unique_identifier||""),
+      "Comment ID":String(content.comment_id||""),
+      "Comment":String(content.comment_text||content.text||""),
+      "Post ID":String(content.video_id||""),
+      "DM Status":"AUTOMATION_ERROR",
+      "WhatsApp Link":"",
       "Catatan":"EVENT_KEY="+key+" | "+String(err).slice(0,900)
     });
   }
-  return json_({ok:true,platform:"tiktok",event:event,processed:processed,dm_sent:dmSent,public_reply:publicReply,errors:errors});
+  return json_({ok:true,platform:"tiktok",event:event,dm_sent:dmSent,public_reply:publicReply,errors:errors});
 }
-
 function sendInstagramPrivateReply_(commentId,text){
   const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
   const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
