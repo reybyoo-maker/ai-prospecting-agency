@@ -139,8 +139,18 @@ Return JSON only.
     response = client.models.generate_content(model=MODEL, contents=prompt, config=cfg)
     data = response.parsed if getattr(response, "parsed", None) else json.loads(response.text)
     posts = data.get("posts", []) if isinstance(data, dict) else []
-    cleaned = []
+    by_date = {}
     for p in posts:
+        d = str(p.get("date") or "").strip()
+        if d and d not in by_date:
+            by_date[d] = p
+
+    start_date = datetime.now(WIB).date()
+    cleaned = []
+    for offset in range(PLAN_DAYS):
+        target_date = start_date + timedelta(days=offset)
+        target_iso = target_date.isoformat()
+        p = by_date.get(target_iso) or (posts[offset] if offset < len(posts) else {}) or {}
         slides = list(p.get("slides") or [])[:SLIDE_COUNT]
         while len(slides) < SLIDE_COUNT:
             slides.append({
@@ -149,9 +159,9 @@ Return JSON only.
                 "visual_direction": "Ikon checklist minimalis."
             })
         cleaned.append({
-            "date": str(p.get("date") or ""),
+            "date": target_iso,
             "objective": str(p.get("objective") or "Edukasi"),
-            "topic": str(p.get("topic") or "Tips operasional bisnis"),
+            "topic": str(p.get("topic") or ("Tips operasional bisnis hari "+str(offset+1))),
             "hook": str(p.get("hook") or "Bisnis kamu masih melakukan ini manual?"),
             "caption": str(p.get("caption") or "Insight praktis untuk pemilik bisnis Indonesia."),
             "cta": str(p.get("cta") or "Simpan post ini dan bagikan ke tim."),
