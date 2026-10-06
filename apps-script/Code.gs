@@ -12,6 +12,7 @@ const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Ho
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
 const CODE_VERSION = "2026-10-07.4";
+// Production social automation handlers are enabled in this version.
 
 const HEADERS = [
   "Lead ID","Tanggal ditemukan","Nama bisnis","Email","Sumber email","Website","Social",
@@ -1064,3 +1065,4 @@ function hourlyAutomation_(){
   try{scanReplies_(20);}catch(e){console.log(e);}
   try{processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){console.log(e);}
 }
+
