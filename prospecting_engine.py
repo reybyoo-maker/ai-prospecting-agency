@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from ddgs import DDGS
 from google import genai
 from google.genai import types
-from service_catalog import catalog_text
+from service_catalog import catalog_text, SERVICES
 
 WIB = timezone(timedelta(hours=7))
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
@@ -57,6 +57,69 @@ EMAIL_RE = re.compile(
     r"[A-Za-z0-9.-]+\s*(?:\.|\[dot\]|\(dot\))\s*[A-Za-z]{2,}(?![\w.-])", re.I
 )
 BLOCKED = ("noreply@","no-reply@","donotreply@","do-not-reply@","example@")
+SERVICE_KEYS={x["key"] for x in SERVICES}
+
+def fallback_city(lead):
+    q=str(lead.get("source_query",""))
+    for city in CITIES:
+        if city.lower() in q.lower():
+            return city
+    return ""
+
+def fallback_niche(lead):
+    q=(str(lead.get("source_query",""))+" "+str(lead.get("public_evidence",""))).lower()
+    for niche in sorted(NICHES,key=len,reverse=True):
+        if niche.lower() in q:
+            return niche
+    return ""
+
+def fallback_service(evidence):
+    low=str(evidence or "").lower()
+    best=None
+    best_score=0
+    for s in SERVICES:
+        score=sum(1 for sig in s["signals"] if sig.lower() in low)
+        if score>best_score:
+            best_score=score
+            best=s
+    return best or SERVICES[0]
+
+def clean_ai_result(ai, lead):
+    ai=dict(ai or {})
+    service_key=str(ai.get("recommended_service") or "").strip()
+    service=fallback_service(lead.get("public_evidence","")) if service_key not in SERVICE_KEYS else next(x for x in SERVICES if x["key"]==service_key)
+    business=str(ai.get("business_name") or "").strip()
+    if not business:
+        business=norm(lead.get("search_title")) or norm(lead.get("recipient_email","").split("@")[0]).replace("."," ").title()
+    city=str(ai.get("city") or "").strip() or fallback_city(lead)
+    niche=str(ai.get("niche") or "").strip() or fallback_niche(lead)
+    need=str(ai.get("detected_need") or "").strip()
+    pain=str(ai.get("pain_point") or "").strip()
+    hook=str(ai.get("personal_hook") or "").strip()
+    subject=str(ai.get("subject") or "").strip()
+    body=str(ai.get("body") or "").strip()
+    if not need:
+        need="Kebutuhan belum dapat dipastikan sepenuhnya dari bukti publik yang tersedia."
+    if not pain:
+        pain="Belum ada pain point internal yang dapat dipastikan dari sumber publik."
+    if not hook:
+        hook="Kami melihat aktivitas/informasi publik yang relevan dengan area "+service["name"].lower()+"."
+    if not subject:
+        subject="Bantuan remote untuk "+business+" — "+service["name"]
+    if not body:
+        body=("Halo tim "+business+",\n\n"
+              "Saya melihat ada area yang mungkin bisa dibantu secara remote, yaitu "+service["pitch"]+"\n\n"
+              "Kalau relevan, saya bisa kirim contoh alur kerja singkat untuk dipertimbangkan.\n\n"
+              "Jika email ini tidak relevan, balas UNSUBSCRIBE dan kami tidak akan menghubungi lagi.\n\n"
+              "Salam,\nRey\nSonjaya Remote Business Services")
+    return {
+        "business_name":business,"city":city,"niche":niche,
+        "score":max(0,min(100,int(ai.get("score") or 0))),
+        "priority":str(ai.get("priority") or ""),
+        "detected_need":need,"recommended_service":service["key"],
+        "pain_point":pain,"personal_hook":hook,"subject":subject[:220],"body":body
+    }
+
 
 def norm(s):
     return re.sub(r"\s+"," ",str(s or "")).strip()
@@ -230,7 +293,7 @@ def run():
     rows=[]
     for i,lead in enumerate(leads[:MAX_AI_PER_RUN]):
         try:
-            ai=score_one(lead)
+            ai=clean_ai_result(score_one(lead),lead)
             score=int(ai["score"])
             rows.append({
               "lead_id":make_id(lead["recipient_email"]),
@@ -240,8 +303,8 @@ def run():
               "email_source_url":lead["email_source_url"],
               "website_url":lead["website_url"],
               "social_url":lead["social_url"],
-              "kota":ai["city"],
-              "kategori":ai["niche"],
+              "kota":ai["city"] or fallback_city(lead) or "Tidak diketahui dari evidence publik",
+              "kategori":ai["niche"] or fallback_niche(lead) or "Tidak diketahui dari evidence publik",
               "bukti_publik":lead["public_evidence"],
               "skor":score,
               "alasan":ai["personal_hook"],
@@ -251,16 +314,13 @@ def run():
               "subject":f"[SJ-{make_id(lead['recipient_email'])}] {ai['subject']}"[:245],
               "body":ai["body"],
               "status":"READY" if score>=75 else "REVIEW",
-              "catatan":"public business email"
+              "catatan":"public business email; initial email requires MANUAL SEND"
             })
         except Exception as e:
             print("AI_ERROR",i,type(e).__name__,e)
     if rows:
         print("INGEST",sheet_call("ingest",rows=rows))
-    try:
-        print("SEND",sheet_call("send_queue",limit=SEND_LIMIT))
-    except Exception as e:
-        print("SEND_ERROR",e)
+    print("SEND", "DISABLED — initial email is manual only in Google Sheets")
     try:
         print("REPLIES",sheet_call("scan_replies",limit=20))
     except Exception as e:
