@@ -1,13 +1,15 @@
 # Sonjaya AI Remote Agency
 
-V2 adalah mesin remote-service sales dan content automation:
-Discovery bisnis -> email publik -> AI membaca kebutuhan -> pilih satu layanan -> personalized email -> Google Sheets -> Gmail -> follow-up otomatis -> deteksi reply -> WhatsApp handoff.
+Sistem saat ini dipisah menjadi tiga jalur agar aman:
+1. Prospecting AI mencari bisnis + email publik dan mengisi Google Sheets.
+2. Email pertama **tidak pernah dikirim otomatis**. Pengiriman dilakukan manual dari kolom **Manual Send** atau menu **Sonjaya -> Kirim Lead Terpilih**. Setelah email pertama terkirim, follow-up dan deteksi reply tetap otomatis.
+3. Content engine hanya membuat **content planning + carousel 7 slide**. Tidak ada upload otomatis. File carousel disimpan di repository dan link PDF/cover masuk ke sheet **Content Planning**.
 
 ## Sales engine
 
-Discovery berjalan setiap 2 jam melalui GitHub Actions. Mesin mencari banyak kombinasi kota/niche/query dan menerima hasil dari website serta profil sosial publik hanya ketika email bisnis terlihat secara publik. Kandidat tanpa email publik dibuang.
+Discovery berjalan terjadwal melalui GitHub Actions. Kandidat tanpa email publik dibuang.
 
-Gemini membaca evidence publik sebelum memilih layanan:
+Gemini membaca evidence publik sebelum memilih satu layanan:
 - Virtual Assistant / Admin Remote
 - Customer Support / WhatsApp Support
 - Lead Generation / Prospecting
@@ -19,94 +21,105 @@ Gemini membaca evidence publik sebelum memilih layanan:
 - Appointment Setting
 - Documents / Presentation / Reporting
 
-Email tidak menawarkan seluruh katalog sekaligus. AI memilih satu layanan yang paling relevan dengan bukti.
+Field inti prospect diberi fallback yang tidak mengarang fakta ketika AI mengembalikan nilai kosong. Data lama di sheet tidak dihapus atau dipindahkan.
 
-## Email sequence
+## Manual email sending
 
-Status utama:
-READY -> SENT -> FOLLOWUP_1 -> FOLLOWUP_2 -> FOLLOWUP_DONE
+Status awal tetap READY atau REVIEW.
 
-Follow-up default:
-- +2 hari
-- +5 hari
-- +9 hari
+Kolom baru:
+- Manual Send = checkbox. Centang baris untuk mengirim.
+- Send Result = hasil pengiriman.
 
-Begitu ada reply, follow-up berhenti. UNSUBSCRIBE menandai OPTOUT dan menghentikan komunikasi.
+Menu spreadsheet:
+- Sonjaya -> Kirim Lead Terpilih
+- Sonjaya -> Pasang Kontrol Manual Send
 
-Reply yang terdeteksi diarahkan ke WhatsApp menggunakan nomor yang disimpan di Script Property WA_NUMBER. Jika nomor belum diatur, balasan tetap dicatat tetapi tidak membuat link WhatsApp.
+Email pertama tidak lagi dikirim oleh GitHub workflow. Endpoint lama send_queue tetap ada tetapi menjadi no-op sebagai safety guard.
 
-Default outbound limit adalah 20 recipient per hari dan mesin menghormati quota MailApp.
+Setelah manual send berhasil:
+SENT -> FOLLOWUP_1 -> FOLLOWUP_2 -> FOLLOWUP_DONE
 
-## Google Sheets
+Jika ada reply, follow-up berhenti. UNSUBSCRIBE menghentikan komunikasi.
 
-Apps Script membuat:
-- Prospects: semua prospect, evidence, score, kebutuhan, service, email, status, reply, follow-up, opt-out.
-- Content: kalender konten dan status publish.
+## Social comment -> DM
 
-## Setup Google sekali
+Apps Script sekarang menerima webhook Instagram dan memeriksa keyword yang disimpan di Script Property IG_COMMENT_KEYWORD (default REY MAU).
 
-1. Buka Google Sheet.
-2. Extensions -> Apps Script.
-3. Tempel apps-script/Code.gs.
-4. Jalankan setup() satu kali dan berikan izin Gmail/Spreadsheet.
-5. Script Properties:
-   - WEBHOOK_TOKEN = token acak.
-   - WA_NUMBER = nomor WhatsApp format internasional tanpa +.
-6. Deploy -> New deployment -> Web app.
-7. Execute as: Me.
-8. Beri akses sesuai kebutuhan endpoint. URL Web App disimpan sebagai GitHub Secret SHEET_WEBHOOK_URL.
-9. GitHub Secrets minimum:
-   - GEMINI_API_KEY
-   - SHEET_WEBHOOK_URL
-   - WEBHOOK_TOKEN
+Jika komentar cocok:
+Instagram comment -> private reply DM -> WhatsApp link -> Social Leads
 
-V2 tidak membutuhkan GMAIL_APP_PASSWORD atau TINYFISH_API_KEY.
+Lead sosial dicatat di sheet baru Social Leads.
 
-## Social content
-
-content_runner.py membuat kalender 7 hari Instagram + TikTok dan dua asset PNG per hari. Asset disimpan ke social_assets/, lalu workflow meng-commit asset agar URL raw GitHub dapat menjadi media source publik.
-
-social_dispatch.py memanggil Apps Script untuk publish:
-- Instagram photo post menggunakan token/API account Instagram professional.
-- TikTok photo Direct Post menggunakan token OAuth.
-
-## Social credentials
-
-Script Properties untuk Instagram:
+Script Properties:
+- META_VERIFY_TOKEN
 - IG_USER_ID
 - IG_ACCESS_TOKEN
-- optional IG_API_VERSION (default v26.0)
+- IG_API_VERSION (opsional)
+- IG_MESSAGING_HOST (opsional, default https://graph.instagram.com)
+- IG_COMMENT_KEYWORD (opsional, default REY MAU)
+- WA_NUMBER
 
-Script Properties untuk TikTok:
-- TIKTOK_CLIENT_KEY
-- TIKTOK_CLIENT_SECRET
-- TIKTOK_ACCESS_TOKEN
-- TIKTOK_REFRESH_TOKEN
+Private replies Instagram menggunakan comment ID dan tunduk pada aturan jendela waktu serta batas reply per komentar.
 
-TikTok access token harus dapat direfresh. Adapter menyimpan access token dan refresh token baru yang dikembalikan TikTok.
+### TikTok
 
-Jika credential sosial belum ada, workflow tetap membuat content + assets dan tidak gagal.
+Sistem tidak memalsukan dukungan TikTok comment -> DM. Dokumentasi TikTok saat ini menyediakan akses komentar melalui Research API dan data portability untuk riwayat DM, tetapi tidak menyediakan endpoint publik yang setara untuk mengirim DM berdasarkan komentar. Karena itu jalur TikTok comment -> DM tidak diaktifkan dengan scraping atau endpoint tidak resmi.
 
-## Important platform constraints
+## Content planning
 
-Instagram publishing hanya tersedia untuk akun profesional dan membutuhkan izin API yang sesuai.
+Workflow content sekarang:
+Gemini -> content planning 7 hari -> 7 carousel x 7 slide -> commit file -> link masuk Google Sheets
 
-TikTok Direct Post membutuhkan TikTok developer app, scope publish, user authorization, dan approval/audit sesuai keadaan app. Unaudited clients can be restricted to private visibility.
+Sheet baru:
+Content Planning
 
-DM automation tidak dipaksakan memakai password/scraping. Untuk inbox/DM penuh dibutuhkan API permissions, webhook/authorization, dan implementasi kanal resmi yang sesuai.
+Kolom penting:
+- Tanggal
+- Platform
+- Tujuan
+- Topik
+- Hook
+- Caption
+- CTA
+- Slide Count
+- Carousel PDF URL
+- Carousel Cover URL
+- Slides JSON
+- Status
+- Publish Mode
 
-## Discovery limits
+Tidak ada langkah publish ke Instagram/TikTok di workflow.
 
-Tidak ada crawler yang jujur dapat menjamin 100% internet. Sistem hanya menemukan bisnis yang memiliki jejak publik dan dapat diakses/index oleh sumber discovery.
+Carousel dibuat dengan AI content director yang merancang alur slide, hook, copy, dan visual direction, lalu renderer membuat layout 1080x1350 yang konsisten dan rapi.
 
-Email wajib berasal dari informasi publik. Tidak menggunakan database curian, login-only data, atau credential pihak lain.
+Google Gemini memiliki model image-generation khusus untuk aset visual, tetapi pricing saat ini mencantumkan model image-generation tanpa free tier. Pipeline utama karena itu memakai AI text + renderer carousel lokal agar tidak memicu biaya tersembunyi.
 
-## Automation limits
+## Google Sheets setup
 
-GitHub Actions menjalankan workflow terjadwal; "24/7" berarti pekerjaan otomatis berulang, bukan proses server yang hidup setiap detik. Scheduled workflows pada repository publik dapat dinonaktifkan GitHub setelah 60 hari tanpa aktivitas repository, jadi repository perlu tetap aktif.
+1. Tempel apps-script/Code.gs ke Apps Script yang terikat ke spreadsheet.
+2. Jalankan setup() satu kali dan izinkan akses.
+3. Pastikan Script Properties berikut sudah ada:
+   - WEBHOOK_TOKEN
+   - WA_NUMBER
+   - META_VERIFY_TOKEN
+   - IG_USER_ID
+   - IG_ACCESS_TOKEN
+   - IG_COMMENT_KEYWORD = REY MAU
+4. Karena perubahan Apps Script perlu masuk ke deployment Web App, buat versi deployment baru setelah mengganti Code.gs.
+5. Refresh spreadsheet. Menu Sonjaya akan muncul dan checkbox Manual Send tersedia.
 
-## Validation
+## Automation safety
 
-validate.yml menjalankan:
-- Python syntax validation.
-- JavaScript syntax validation untuk apps-script/Code.gs.
+- Initial email: manual.
+- Follow-up: otomatis setelah initial email manual terkirim.
+- Reply detection: otomatis.
+- Instagram keyword DM: otomatis setelah webhook + API permission siap.
+- Content planning: otomatis.
+- Content upload: nonaktif.
+
+## Limits
+
+Discovery hanya menemukan data publik yang dapat diindeks/diakses sumber discovery. Tidak ada klaim cakupan 100% internet.
+
+GitHub Actions adalah automation terjadwal, bukan proses server yang hidup setiap detik.
