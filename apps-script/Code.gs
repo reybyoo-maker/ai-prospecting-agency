@@ -1,12 +1,14 @@
 const SHEET_NAME = "Prospects";
 const CONTENT_SHEET = "Content";
+const CONTENT_PLAN_SHEET = "Content Planning";
 const MAX_ATTEMPTS = 3;
 const DAILY_SEND_LIMIT = 20;
 const MAX_FOLLOWUPS_PER_RUN = 5;
 const AGENCY_NAME = "Sonjaya Remote Business Services";
 const MANUAL_SEND_COL = "Manual Send";
 const SEND_RESULT_COL = "Send Result";
-const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result","Carousel PDF URL","Carousel Cover URL","Slides JSON","Publish Mode"];
+const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
+const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
 
@@ -152,6 +154,17 @@ function handleInstagramWebhook_(body){
     });
   });
   return json_({ok:true,processed:processed,matched:matched,dm_sent:dmSent,errors:errors});
+}
+
+function contentPlanningSheet_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  let sh=ss.getSheetByName(CONTENT_PLAN_SHEET);
+  if(!sh)sh=ss.insertSheet(CONTENT_PLAN_SHEET);
+  ensureHeaders_(sh,CONTENT_PLAN_HEADERS);
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,CONTENT_PLAN_HEADERS.length).setFontWeight("bold");
+  sh.getDataRange().setWrap(true);
+  return sh;
 }
 
 function contentSheet_(){
@@ -466,25 +479,48 @@ function scanReplies_(limit){
 }
 
 function ingestContent_(rows){
-  const sh=contentSheet_(), existing={};
-  if(sh.getLastRow()>=2){
-    const all=sh.getRange(2,1,sh.getLastRow()-1,Math.min(sh.getLastColumn(),4)).getValues();
-    all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])+"|"+String(r[3])]=true;});
+  const planningRows=rows.filter(function(r){return String(r.publish_mode||"") === "PLANNING_ONLY";});
+  const legacyRows=rows.filter(function(r){return String(r.publish_mode||"") !== "PLANNING_ONLY";});
+  let addedPlanning=0,addedLegacy=0;
+
+  if(planningRows.length){
+    const sh=contentPlanningSheet_(), existing={};
+    if(sh.getLastRow()>=2){
+      const all=sh.getRange(2,1,sh.getLastRow()-1,2).getValues();
+      all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])]=true;});
+    }
+    planningRows.forEach(function(r){
+      const key=String(r.date)+"|"+String(r.platform);
+      if(existing[key])return;
+      sh.appendRow([
+        r.date,r.platform,r.format||"CAROUSEL_7_SLIDES",r.objective||"",
+        r.topic||"",r.hook||"",r.caption||"",r.cta||"",
+        Number(r.slide_count||7),r.carousel_pdf_url||"",r.carousel_cover_url||"",
+        r.slides_json||"",r.status||"PLANNED","PLANNING_ONLY",
+        r.catatan||"Tidak diupload otomatis"
+      ]);
+      existing[key]=true; addedPlanning++;
+    });
   }
-  let added=0;
-  rows.forEach(function(r){
-    const key=String(r.date)+"|"+String(r.platform)+"|"+String(r.topic);
-    if(existing[key])return;
-    sh.appendRow([
-      r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,
-      r.asset_url||r.carousel_cover_url||"",r.status||"PLANNED",
-      r.publish_result||"NOT_UPLOADED",
-      r.carousel_pdf_url||"",r.carousel_cover_url||"",
-      r.slides_json||"",r.publish_mode||"PLANNING_ONLY"
-    ]);
-    existing[key]=true;added++;
-  });
-  return json_({ok:true,added:added});
+
+  if(legacyRows.length){
+    const sh=contentSheet_(), existing={};
+    if(sh.getLastRow()>=2){
+      const all=sh.getRange(2,1,sh.getLastRow()-1,4).getValues();
+      all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])+"|"+String(r[3])]=true;});
+    }
+    legacyRows.forEach(function(r){
+      const key=String(r.date)+"|"+String(r.platform)+"|"+String(r.topic);
+      if(existing[key])return;
+      sh.appendRow([
+        r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,
+        r.asset_url||"",r.status||"PLANNED",r.publish_result||"NOT_UPLOADED"
+      ]);
+      existing[key]=true;addedLegacy++;
+    });
+  }
+
+  return json_({ok:true,added_planning:addedPlanning,added_legacy:addedLegacy});
 }
 
 function urlFetchJson_(url,options){
@@ -626,7 +662,7 @@ function markContentPublished_(date,platform,result){
 }
 
 function setup(){
-  sheet_();contentSheet_();socialLeadsSheet_();
+  sheet_();contentSheet_();contentPlanningSheet_();socialLeadsSheet_();
   const triggers=ScriptApp.getProjectTriggers();
   if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
     ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
