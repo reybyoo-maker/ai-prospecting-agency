@@ -104,12 +104,14 @@ def push(rows):
 
 data=generate()
 posts=data["posts"] if isinstance(data,dict) else []
+today=datetime.now(WIB).date().isoformat()
 for p in posts:
-    make_asset(p)
+    if str(p.get("date",""))==today:
+        make_asset(p)
 
 Path("social_publish_payload.json").write_text(
     json.dumps(posts,ensure_ascii=False,indent=2),
     encoding="utf-8"
 )
 print(push(posts))
-print("ASSETS",len(posts))
+print("PLANNED_POSTS",len(posts),"TODAY_ASSETS",sum(1 for p in posts if p.get("asset_url")))
