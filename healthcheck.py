@@ -2,6 +2,8 @@ from __future__ import annotations
 import os, sys, requests
 from google import genai
 
+EXPECTED_APPS_SCRIPT_VERSION = os.getenv("EXPECTED_APPS_SCRIPT_VERSION", "2026-10-07.1")
+
 def need(name):
     value=os.getenv(name,"").strip()
     if not value:
@@ -21,6 +23,26 @@ if ok:
         if r.status_code>=300: ok=False
     except Exception as e:
         print("SHEET_ERROR",type(e).__name__,e)
+        ok=False
+
+    try:
+        r=requests.post(
+            os.environ["SHEET_WEBHOOK_URL"],
+            json={"token":os.environ["WEBHOOK_TOKEN"],"action":"healthcheck"},
+            timeout=30,
+        )
+        print("APPS_SCRIPT_HEALTH_HTTP",r.status_code,r.text[:800])
+        data=r.json()
+        if r.status_code>=300 or not data.get("ok"):
+            ok=False
+        elif data.get("version") != EXPECTED_APPS_SCRIPT_VERSION:
+            print("APPS_SCRIPT_VERSION_MISMATCH",data.get("version"),"expected",EXPECTED_APPS_SCRIPT_VERSION)
+            ok=False
+        elif not data.get("triggers",{}).get("manualSendOnEdit"):
+            print("APPS_SCRIPT_MANUAL_TRIGGER_MISSING")
+            ok=False
+    except Exception as e:
+        print("APPS_SCRIPT_HEALTH_ERROR",type(e).__name__,e)
         ok=False
 
     try:
