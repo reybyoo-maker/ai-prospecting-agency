@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.2";
+const CODE_VERSION = "2026-10-07.3";
 
 const HEADERS = [
   "Lead ID","Tanggal ditemukan","Nama bisnis","Email","Sumber email","Website","Social",
@@ -140,6 +140,322 @@ function logSocialLead_(row){
   sh.appendRow(o);
 }
 
+
+function setupSocialAutomation_(){
+  const props=PropertiesService.getScriptProperties();
+  if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("TIKTOK_COMMENT_KEYWORD"))props.setProperty("TIKTOK_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("TIKTOK_API_VERSION"))props.setProperty("TIKTOK_API_VERSION","v1.3");
+  socialLeadsSheet_();
+  return json_({ok:true,message:"Social automation defaults ready. Add platform credentials in Script Properties."});
+}
+
+function socialReplyText_(platform,username){
+  const who=username?(" @"+String(username).replace(/^@/,"")):"";
+  const wa=socialWaLink_(username||("lead "+platform));
+  return "Halo"+who+"! 👋 Makasih sudah tertarik dengan Sonjaya. Kami bantu bisnis dengan remote support dan automation berbasis AI. Kalau mau lanjut, chat WhatsApp di sini:"+(wa?"\n"+wa:"");
+}
+
+function sendInstagramDm_(recipientId,text){
+  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
+  const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
+  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
+  const host=PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com";
+  if(!token||!igUserId)throw new Error("INSTAGRAM_MESSAGING_NOT_CONFIGURED");
+  return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(igUserId)+"/messages",{
+    method:"post",
+    contentType:"application/json",
+    headers:{Authorization:"Bearer "+token},
+    payload:JSON.stringify({recipient:{id:String(recipientId)},message:{text:String(text||"").slice(0,1000)}}),
+    muteHttpExceptions:true
+  });
+}
+
+function handleInstagramMessages_(body){
+  let processed=0,replied=0,errors=0;
+  const entries=Array.isArray(body&&body.entry)?body.entry:[];
+  entries.forEach(function(entry){
+    const messaging=Array.isArray(entry&&entry.messaging)?entry.messaging:[];
+    messaging.forEach(function(item){
+      const sender=item&&item.sender||{}, recipient=item&&item.recipient||{};
+      const senderId=String(sender.id||""), recipientId=String(recipient.id||"");
+      const msg=item&&item.message||{};
+      const text=String(msg.text||"").trim();
+      if(!senderId||!text)return;
+      const ownId=String(PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"");
+      if(ownId&&senderId===ownId)return;
+      processed++;
+      try{
+        const username=String(msg.username||sender.username||"");
+        const reply=socialReplyText_("Instagram",username);
+        const result=sendInstagramDm_(senderId,reply);
+        replied++;
+        logSocialLead_({
+          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+          "Platform":"Instagram",
+          "Keyword":"",
+          "Username":username,
+          "User ID":senderId,
+          "Comment ID":"",
+          "Comment":text,
+          "Post ID":"",
+          "DM Status":"DM_AUTO_REPLY_SENT",
+          "WhatsApp Link":socialWaLink_(username||"Instagram lead"),
+          "Catatan":"Inbound DM auto-reply | "+JSON.stringify(result).slice(0,700)
+        });
+      }catch(err){
+        errors++;
+        logSocialLead_({
+          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+          "Platform":"Instagram",
+          "Keyword":"",
+          "Username":"",
+          "User ID":senderId,
+          "Comment ID":"",
+          "Comment":text,
+          "Post ID":"",
+          "DM Status":"DM_AUTO_REPLY_ERROR",
+          "WhatsApp Link":"",
+          "Catatan":String(err).slice(0,700)
+        });
+      }
+    });
+  });
+  return json_({ok:true,platform:"instagram",processed:processed,replied:replied,errors:errors});
+}
+
+function handleInstagramWebhook_(body){
+  let result={comments:null,messages:null};
+  result.comments=handleInstagramCommentsOnly_(body);
+  result.messages=handleInstagramMessages_(body);
+  return json_({ok:true,platform:"instagram",comments:result.comments,messages:result.messages});
+}
+
+function handleInstagramCommentsOnly_(body){
+  let processed=0,matched=0,dmSent=0,errors=0;
+  const entries=Array.isArray(body&&body.entry)?body.entry:[];
+  entries.forEach(function(entry){
+    const changes=Array.isArray(entry&&entry.changes)?entry.changes:[];
+    changes.forEach(function(change){
+      const field=String(change.field||"").toLowerCase();
+      if(field==="messages" || field==="messaging_postbacks" || field==="message"){
+        return;
+      }
+      if(field!=="comments")return;
+      const v=change.value||{}, commentId=String(v.id||v.comment_id||""), text=String(v.text||"");
+      const from=v.from||{}, userId=String(from.id||""), username=String(from.username||from.name||"");
+      const media=v.media||{}, postId=String(media.id||v.media_id||"");
+      processed++;
+      if(!commentId||!commentMatchesKeyword_(text)||socialCommentExists_(commentId))return;
+      matched++;
+      const wa=socialWaLink_(username||"Instagram lead");
+      let dmStatus="NO_WA_NUMBER",note="Keyword cocok.";
+      try{
+        const msg=socialReplyText_("Instagram",username);
+        const result=sendInstagramPrivateReply_(commentId,msg);
+        dmStatus="DM_SENT"; note=JSON.stringify(result).slice(0,800); dmSent++;
+      }catch(err){
+        dmStatus="DM_ERROR"; note=String(err).slice(0,800); errors++;
+      }
+      logSocialLead_({
+        "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+        "Platform":"Instagram",
+        "Keyword":PropertiesService.getScriptProperties().getProperty("IG_COMMENT_KEYWORD")||"REY MAU",
+        "Username":username,
+        "User ID":userId,
+        "Comment ID":commentId,
+        "Comment":text,
+        "Post ID":postId,
+        "DM Status":dmStatus,
+        "WhatsApp Link":wa,
+        "Catatan":note
+      });
+    });
+  });
+  return {processed:processed,matched:matched,dm_sent:dmSent,errors:errors};
+}
+
+function tiktokBaseUrl_(){
+  const v=PropertiesService.getScriptProperties().getProperty("TIKTOK_API_VERSION")||"v1.3";
+  return "https://business-api.tiktok.com/open_api/"+v;
+}
+
+function tiktokToken_(){
+  const token=PropertiesService.getScriptProperties().getProperty("TIKTOK_ACCESS_TOKEN")||"";
+  if(!token)throw new Error("TIKTOK_ACCESS_TOKEN_NOT_CONFIGURED");
+  return token;
+}
+
+function tiktokBusinessId_(){
+  const id=PropertiesService.getScriptProperties().getProperty("TIKTOK_BUSINESS_ID")||"";
+  if(!id)throw new Error("TIKTOK_BUSINESS_ID_NOT_CONFIGURED");
+  return id;
+}
+
+function tiktokJson_(path,payload,method){
+  const opts={
+    method:method||"post",
+    contentType:"application/json",
+    headers:{"Access-Token":tiktokToken_()},
+    muteHttpExceptions:true
+  };
+  if(payload)opts.payload=JSON.stringify(payload);
+  return urlFetchJson_(tiktokBaseUrl_()+path,opts);
+}
+
+function tiktokKeywordMatch_(text){
+  const keyword=PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU";
+  const hay=normalizeKeyword_(text), needle=normalizeKeyword_(keyword);
+  return Boolean(needle && (hay===needle || hay.indexOf(needle)!==-1));
+}
+
+function tiktokMessageText_(content){
+  if(content==null)return "";
+  if(typeof content==="string"){
+    try{return tiktokMessageText_(JSON.parse(content));}catch(e){return String(content);}
+  }
+  if(typeof content!=="object")return String(content);
+  return String(
+    content.text ||
+    (content.message&&content.message.text&&content.message.text.body) ||
+    (content.text&&content.text.body) ||
+    content.body ||
+    content.comment_text ||
+    ""
+  );
+}
+
+function tiktokUserName_(content){
+  if(!content||typeof content!=="object")return "";
+  const u=content.from_user||content.from||content.user||content.sender||{};
+  return String(u.username||u.nickname||u.name||"");
+}
+
+function tiktokSendDm_(conversationId,text){
+  return tiktokJson_("/business/message/send/",{
+    business_id:tiktokBusinessId_(),
+    recipient_type:"CONVERSATION",
+    recipient:String(conversationId),
+    message_type:"TEXT",
+    text:{body:String(text||"").slice(0,6000)}
+  },"post");
+}
+
+function tiktokSendCommentDm_(commentId,text){
+  return tiktokJson_("/business/message/send/",{
+    business_id:tiktokBusinessId_(),
+    message_type:"TEXT",
+    text:{body:String(text||"").slice(0,6000)},
+    direct_reply:{
+      reply_type:"COMMENT_REPLY",
+      comment_reply:{comment_id:String(commentId)}
+    }
+  },"post");
+}
+
+function tiktokReplyComment_(videoId,commentId,text){
+  return tiktokJson_("/business/comment/reply/create/",{
+    business_id:tiktokBusinessId_(),
+    video_id:String(videoId),
+    comment_id:String(commentId),
+    text:String(text||"").slice(0,1500)
+  },"post");
+}
+
+function tiktokEventObject_(body){
+  if(!body)return {};
+  if(body.content&&typeof body.content==="string"){
+    try{return JSON.parse(body.content||"{}");}catch(e){}
+  }
+  if(body.content&&typeof body.content==="object")return body.content;
+  return body;
+}
+
+function socialEventKey_(platform,eventId){
+  return String(platform)+":"+String(eventId||"");
+}
+
+function socialEventExists_(eventKey){
+  const sh=socialLeadsSheet_(),last=sh.getLastRow();
+  if(last<2)return false;
+  const col=colSocial_("Catatan");
+  return sh.getRange(2,col,last-1,1).getValues().some(r=>String(r[0]||"").indexOf("EVENT_KEY="+eventKey)===0);
+}
+
+function handleTikTokWebhook_(body){
+  let event=String(body.event||body.webhook_event_type||"").toLowerCase();
+  const content=tiktokEventObject_(body);
+  let processed=0,dmSent=0,publicReply=0,errors=0;
+  const eventId=String(body.event_id||body.request_id||content.event_id||content.message_id||content.comment_id||Utilities.getUuid());
+  const key=socialEventKey_("tiktok",eventId);
+  if(socialEventExists_(key))return json_({ok:true,platform:"tiktok",duplicate:true,event:event});
+  processed=1;
+
+  try{
+    if(event.indexOf("high_intent_comment")>=0 || event==="im_receive_high_intent_comment"){
+      const commentId=String(content.comment_id||"");
+      const msg=socialReplyText_("TikTok",tiktokUserName_(content));
+      if(commentId){
+        const result=tiktokSendCommentDm_(commentId,msg);
+        dmSent++;
+        logSocialLead_({
+          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+          "Platform":"TikTok","Keyword":String(content.comment_text||""),
+          "Username":tiktokUserName_(content),"User ID":String(content.unique_identifier||""),
+          "Comment ID":commentId,"Comment":String(content.comment_text||""),
+          "Post ID":String(content.video_id||""),
+          "DM Status":"DM_SENT",
+          "WhatsApp Link":socialWaLink_(tiktokUserName_(content)),
+          "Catatan":"EVENT_KEY="+key+" | "+JSON.stringify(result).slice(0,700)
+        });
+      }
+    } else if(event.indexOf("receive_message")>=0 || event==="im_receive_message"){
+      const conversationId=String(content.conversation_id||content.conversation||"");
+      const messageId=String(content.message_id||"");
+      const text=String(tiktokMessageText_(content)||"").trim();
+      const fromId=String((content.from_user&&content.from_user.id)||content.from||"");
+      if(conversationId && text && !content.from_user?.role==="business_account"){
+        const msg=socialReplyText_("TikTok",tiktokUserName_(content));
+        const result=tiktokSendDm_(conversationId,msg);
+        dmSent++;
+        logSocialLead_({
+          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+          "Platform":"TikTok","Keyword":"","Username":tiktokUserName_(content),"User ID":fromId,
+          "Comment ID":"","Comment":text,"Post ID":"",
+          "DM Status":"DM_AUTO_REPLY_SENT","WhatsApp Link":socialWaLink_(tiktokUserName_(content)),
+          "Catatan":"EVENT_KEY="+key+" | MESSAGE_ID="+messageId+" | "+JSON.stringify(result).slice(0,700)
+        });
+      }
+    } else if(event.indexOf("comment")>=0 || event==="comment.update"){
+      const commentId=String(content.comment_id||content.id||"");
+      const videoId=String(content.video_id||"");
+      const commentText=String(content.comment_text||content.text||"");
+      if(commentId && videoId && tiktokKeywordMatch_(commentText)){
+        const result=tiktokReplyComment_(videoId,commentId,"Siap! 👋 Gue kirim info lanjut lewat DM kalau akun ini eligible untuk Comment-to-Message. Cek Inbox ya.");
+        publicReply++;
+        logSocialLead_({
+          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+          "Platform":"TikTok","Keyword":PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU",
+          "Username":tiktokUserName_(content),"User ID":String(content.unique_identifier||""),
+          "Comment ID":commentId,"Comment":commentText,"Post ID":videoId,
+          "DM Status":"PUBLIC_REPLY_SENT","WhatsApp Link":socialWaLink_(tiktokUserName_(content)),
+          "Catatan":"EVENT_KEY="+key+" | "+JSON.stringify(result).slice(0,700)
+        });
+      }
+    }
+  }catch(err){
+    errors++;
+    logSocialLead_({
+      "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
+      "Platform":"TikTok","Keyword":"","Username":tiktokUserName_(content),"User ID":"",
+      "Comment ID":String(content.comment_id||""),"Comment":String(content.comment_text||content.text||""),
+      "Post ID":String(content.video_id||""),"DM Status":"AUTOMATION_ERROR","WhatsApp Link":"",
+      "Catatan":"EVENT_KEY="+key+" | "+String(err).slice(0,900)
+    });
+  }
+  return json_({ok:true,platform:"tiktok",event:event,processed:processed,dm_sent:dmSent,public_reply:publicReply,errors:errors});
+}
+
 function sendInstagramPrivateReply_(commentId,text){
   const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
   const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
@@ -247,6 +563,7 @@ function onOpen(){
   SpreadsheetApp.getUi().createMenu("Sonjaya")
     .addItem("Kirim Lead Terpilih","sendSelectedRows_")
     .addItem("Pasang Kontrol Manual Send","setup")
+    .addItem("Setup Social Automation","setupSocialAutomation_")
     .addToUi();
 }
 
@@ -365,6 +682,7 @@ function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
     if(body && body.object==="instagram")return handleInstagramWebhook_(body);
+    if(body && (body.event || body.webhook_event_type || body.client_key) && !body.action)return handleTikTokWebhook_(body);
     if(!auth_(body))return json_({ok:false,error:"Unauthorized"});
     const a=body.action||"ingest";
     if(a==="healthcheck")return liveHealth_();
@@ -761,7 +1079,7 @@ function markContentPublished_(date,platform,result){
 }
 
 function setup(){
-  sheet_();contentSheet_();contentPlanningSheet_();socialLeadsSheet_();
+  sheet_();contentSheet_();contentPlanningSheet_();socialLeadsSheet_();setupSocialAutomation_();
   const props=PropertiesService.getScriptProperties();
   if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
   if(!props.getProperty("IG_API_VERSION"))props.setProperty("IG_API_VERSION","v26.0");
