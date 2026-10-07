@@ -1,4 +1,4 @@
-name: Sonjaya Daily Content Planning
+name: Sonjaya Daily Content + Auto Publishing
 
 on:
   workflow_dispatch:
@@ -27,10 +27,20 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: "main"
         run: python content_runner.py
-      - name: Save planning-only carousel files to repository
+      - name: Save carousel assets and publish manifest
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add carousels
-          git diff --cached --quiet || git commit -m "chore: update content planning carousels"
+          git add carousels publish_manifest.json
+          git diff --cached --quiet || git commit -m "chore: update daily content assets"
           git push
+
+      - name: Wait for public GitHub asset URLs
+        run: sleep 10
+
+      - name: Auto-publish today's post to social channels
+        env:
+          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          AUTO_PUBLISH_PLATFORMS: "instagram,tiktok"
+        run: python social_publisher.py
