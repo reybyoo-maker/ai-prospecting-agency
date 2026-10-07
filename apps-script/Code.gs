@@ -780,13 +780,13 @@ function socialHealth_(){
     for(let i=0;i<hosts.length;i++){
       const host=hosts[i];
       try{
-        const version=out.instagram.api_version;
         const id=String(props.getProperty("IG_USER_ID")||"");
         let me;
-        if(id){
-          me=instagramGetHost_(host,"/"+encodeURIComponent(id),{fields:"id,username,name"});
-        }else if(host==="https://graph.instagram.com"){
+        if(host==="https://graph.instagram.com"){
           me=instagramGetHost_(host,"/me",{fields:"id,username"});
+        }else{
+          if(!id) throw new Error("IG_USER_ID diperlukan untuk graph.facebook.com");
+          me=instagramGetHost_(host,"/"+encodeURIComponent(id),{fields:"id,username,name"});
         }
         if(me&&me.id){
           out.instagram.api_ok=true;
