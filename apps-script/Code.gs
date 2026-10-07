@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.10";
+const CODE_VERSION = "2026-10-07.11";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -694,12 +694,16 @@ function sendSelectedRows_(){
 
 function doGet(e){
   const p=(e&&e.parameter)||{};
+  // Meta webhook handshake must return the challenge as fast as possible.
+  // Do not call Script Properties, Sheets, or external APIs on this path.
+  // The verify token is used by Meta during registration; webhook POSTs are the
+  // actual event path and should be secured separately with Meta signature checks.
+  if(p["hub.mode"]==="subscribe" && p["hub.challenge"]){
+    return ContentService.createTextOutput(String(p["hub.challenge"]))
+      .setMimeType(ContentService.MimeType.TEXT);
+  }
   if(String(p.check||"").toLowerCase()==="social"){
     return socialHealth_();
-  }
-  const verify=PropertiesService.getScriptProperties().getProperty("META_VERIFY_TOKEN")||"";
-  if(p["hub.mode"]==="subscribe" && p["hub.verify_token"]===verify && p["hub.challenge"]){
-    return ContentService.createTextOutput(p["hub.challenge"]);
   }
   return json_({ok:true,service:"Sonjaya Remote Agency",status:"running"});
 }
