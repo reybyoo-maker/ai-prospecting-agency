@@ -759,9 +759,11 @@ function salesAutomation_(){
   try{
     removeLegacyAutomationTriggers_();
     let replies,sends,followups;
-    try{replies=scanReplies_(40);}catch(e){replies=json_({ok:false,error:String(e)});}
+    // Send first so a slow Gmail reply scan cannot block outbound sales.
     try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
     try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
+    // Keep reply scanning bounded; any transient failure is logged and retried next cycle.
+    try{replies=scanReplies_(10);}catch(e){replies=json_({ok:false,error:String(e)});}
     const details=logSalesCycle_(replies,sends,followups);
     const cycleOk=Boolean(details && details.replies && details.replies.ok && details.sends && details.sends.ok && details.followups && details.followups.ok);
     return json_({ok:cycleOk,cycle_status:cycleOk?"OK":"PARTIAL_OR_ERROR",replies:details.replies,sends:details.sends,followups:details.followups});
