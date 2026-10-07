@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.7";
+const CODE_VERSION = "2026-10-07.8";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -659,7 +659,9 @@ function sendOneRow_(rowNum){
       return {ok:false,error:"Already sent or handled"};
     }
     if(!email||!subject||!body)throw new Error("Email, Subject, dan Body wajib terisi sebelum kirim.");
-    MailApp.sendEmail({to:email,subject:subject,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
+    const taggedSubject="[SJ-"+String(sh.getRange(rowNum,col_("Lead ID")).getValue()||"")+"] "+subject;
+    MailApp.sendEmail({to:email,subject:taggedSubject,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
+    sh.getRange(rowNum,col_("Subject")).setValue(taggedSubject);
     const first=now_();
     sh.getRange(rowNum,col_("Status")).setValue("SENT");
     scheduleAfterManualSend_(rowNum,first);
@@ -981,6 +983,18 @@ function findThreadByLeadId_(id){
   return threads.length?threads[0]:null;
 }
 
+function findRowByEmail_(email){
+  const target=String(email||"").toLowerCase().trim();
+  if(!target)return -1;
+  const sh=sheet_();
+  if(sh.getLastRow()<2)return -1;
+  const values=sh.getRange(2,col_("Email"),sh.getLastRow()-1,1).getValues();
+  for(let i=0;i<values.length;i++){
+    if(String(values[i][0]||"").toLowerCase().trim()===target)return i+2;
+  }
+  return -1;
+}
+
 function sendFollowupMessage_(leadId,email,subject,body){
   const thread=findThreadByLeadId_(leadId);
   if(thread){
@@ -1049,14 +1063,13 @@ function processFollowups_(limit){
 function scanReplies_(limit){
   const sh=sheet_(),last=sh.getLastRow();
   if(last<2)return json_({ok:true,replied:0});
-  const threads=GmailApp.search("in:inbox newer_than:7d -from:me",0,100);
-  const owner=ownerEmail_();let replied=0;
+  const threads=GmailApp.search("in:inbox newer_than:14d -from:me",0,100);
+  const owner=ownerEmail_();let replied=0,matched=0;
   for(let ti=0;ti<threads.length&&replied<limit;ti++){
     const thread=threads[ti],subject=String(thread.getFirstMessageSubject()||"");
-    const m=subject.match(/\[SJ-([a-f0-9]{12})\]/i); if(!m)continue;
-    const row=findRowById_(m[1]); if(row<2)continue;
-    const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
-    if(["WA_HANDOFF","OPTOUT"].indexOf(status)>=0)continue;
+    const m=subject.match(/\\[SJ-([a-f0-9]{12})\\]/i);
+    let row=-1;
+    if(m) row=findRowById_(m[1]);
 
     const msgs=thread.getMessages();let inbound=null;
     for(let i=msgs.length-1;i>=0;i--){
@@ -1064,6 +1077,18 @@ function scanReplies_(limit){
       if(owner && from.indexOf(owner)===-1){inbound=msgs[i];break;}
     }
     if(!inbound)continue;
+
+    if(row<2){
+      const fromHeader=String(inbound.getFrom()||"");
+      const emailMatch=fromHeader.match(/<([^>]+)>/) || fromHeader.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);
+      const inboundEmail=(emailMatch?(emailMatch[1]||emailMatch[0]):fromHeader).toLowerCase().trim();
+      row=findRowByEmail_(inboundEmail);
+    }
+    if(row<2)continue;
+    matched++;
+
+    const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
+    if(["WA_HANDOFF","OPTOUT"].indexOf(status)>=0)continue;
 
     const body=String(inbound.getPlainBody()||"").slice(0,5000),upper=body.toUpperCase();
     if(upper.indexOf("UNSUBSCRIBE")!==-1){
@@ -1074,11 +1099,11 @@ function scanReplies_(limit){
 
     const business=String(sh.getRange(row,col_("Nama bisnis")).getValue()||"Perusahaan");
     const email=String(sh.getRange(row,col_("Email")).getValue()||"");
-    const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\b/i.test(body)?"INTERESTED":"REPLIED";
+    const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\\b/i.test(body)?"INTERESTED":"REPLIED";
     const wa=waLink_(business,email);
     const replyText=wa
-      ? "Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\n\nWhatsApp: "+wa+"\n\nSalam,\nRey\n"+AGENCY_NAME
-      : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\n\nSalam,\nRey\n"+AGENCY_NAME;
+      ? "Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\\n\\nWhatsApp: "+wa+"\\n\\nSalam,\\nRey\\n"+AGENCY_NAME
+      : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\\n\\nSalam,\\nRey\\n"+AGENCY_NAME;
     try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
     sh.getRange(row,col_("Status")).setValue(wa?"WA_HANDOFF":"REPLIED");
     sh.getRange(row,col_("Reply At")).setValue(now_());
@@ -1087,9 +1112,8 @@ function scanReplies_(limit){
     sh.getRange(row,col_("WhatsApp Handoff")).setValue(wa);
     replied++;
   }
-  return json_({ok:true,replied:replied});
+  return json_({ok:true,replied:replied,matched:matched,scanned_threads:threads.length});
 }
-
 function ingestContent_(rows){
   const planningRows=rows.filter(function(r){
     const mode=String(r.publish_mode||"");
