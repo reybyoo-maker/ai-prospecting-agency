@@ -33,7 +33,7 @@ Jika prospek membalas, follow-up berhenti. Jika mereka mengirim `UNSUBSCRIBE`, s
 Semua pengiriman menggunakan lock, retry/error state, Lead ID, dan subject tag `[SJ-xxxxxxxxxxxx]` agar thread dapat dilacak.
 
 ### Important email limit
-Target operasional adalah 30 initial email setiap 2 jam. Actual send tetap dibatasi kuota akun Google. Apps Script menyediakan `MailApp.getRemainingDailyQuota()`, dan quota resmi saat ini adalah 100 recipient/hari untuk akun konsumen dan 1.500 recipient/hari untuk Google Workspace; batas tersebut dapat berubah. citeturn953425search0turn953425search2
+Target operasional adalah 30 initial email setiap 2 jam. Actual send tetap dibatasi kuota akun Google. Apps Script menyediakan `MailApp.getRemainingDailyQuota()`, dan quota resmi saat ini adalah 100 recipient/hari untuk akun konsumen dan 1.500 recipient/hari untuk Google Workspace; batas tersebut dapat berubah.
 
 Artinya:
 - akun konsumen tidak mungkin mengirim 30 x 12 = 360 recipient/hari;
@@ -147,7 +147,7 @@ Kolom utama Prospects:
 
 ## Automation
 
-Sales discovery tetap menggunakan GitHub Actions terjadwal. Scheduled workflows berjalan dari default branch dan dapat mengalami delay ketika load GitHub tinggi, sehingga sistem tidak menjanjikan ketepatan detik; interval 2 jam tetap menjadi target jadwal. citeturn542564search1turn542564search2
+Sales discovery tetap menggunakan GitHub Actions terjadwal. Scheduled workflows berjalan dari default branch dan dapat mengalami delay ketika load GitHub tinggi, sehingga sistem tidak menjanjikan ketepatan detik; interval 2 jam tetap menjadi target jadwal.
 
 Apps Script menjadi scheduler untuk pengiriman awal, follow-up, dan reply detection.
 
