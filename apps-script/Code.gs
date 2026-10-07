@@ -703,11 +703,11 @@ function salesAutomation_(){
   const lock=LockService.getScriptLock();
   if(!lock.tryLock(1000))return json_({ok:true,skipped:true,reason:"another cycle is running"});
   try{
-    let replies,followups,sends;
+    let replies,sends,followups;
     try{replies=scanReplies_(40);}catch(e){replies=json_({ok:false,error:String(e)});}
-    try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
     try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
-    return json_({ok:true,replies:replies,followups:followups,sends:sends});
+    try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
+    return json_({ok:true,replies:replies,sends:sends,followups:followups});
   }finally{
     try{lock.releaseLock();}catch(e){}
   }
