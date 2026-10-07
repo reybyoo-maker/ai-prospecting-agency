@@ -732,6 +732,73 @@ function liveHealth_(){
   });
 }
 
+function socialHealth_(){
+  const props=PropertiesService.getScriptProperties();
+  const out={
+    ok:true,
+    version:CODE_VERSION,
+    webhook:{
+      meta_verify_token:Boolean(props.getProperty("META_VERIFY_TOKEN")),
+      webhook_token:Boolean(props.getProperty("WEBHOOK_TOKEN")),
+      deployed_web_app:"doGet/doPost handlers present"
+    },
+    instagram:{
+      configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")&&props.getProperty("IG_USER_ID")),
+      host:props.getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com",
+      api_version:props.getProperty("IG_API_VERSION")||"v26.0",
+      user_id_configured:Boolean(props.getProperty("IG_USER_ID")),
+      token_configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
+      api_ok:false,
+      account:null,
+      error:null
+    },
+    tiktok:{
+      configured:Boolean(props.getProperty("TIKTOK_ACCESS_TOKEN")),
+      business_id_configured:Boolean(props.getProperty("TIKTOK_BUSINESS_ID")),
+      token_configured:Boolean(props.getProperty("TIKTOK_ACCESS_TOKEN")),
+      api_ok:false,
+      creator:null,
+      error:null
+    }
+  };
+
+  if(out.instagram.configured){
+    try{
+      const me=instagramGet_("/me",{fields:"id,username"});
+      out.instagram.api_ok=Boolean(me&&me.id);
+      out.instagram.account=me&&me.id ? {id:String(me.id),username:String(me.username||"")} : null;
+      if(!out.instagram.api_ok)out.instagram.error="Instagram /me returned no id: "+JSON.stringify(me).slice(0,900);
+    }catch(err){
+      out.instagram.error=String(err).slice(0,900);
+    }
+  }else{
+    out.instagram.error="IG_ACCESS_TOKEN and IG_USER_ID belum lengkap.";
+  }
+
+  if(out.tiktok.configured){
+    try{
+      const creator=tiktokPublishRequest_("/post/publish/creator_info/query/",{});
+      const code=String(creator&&creator.error&&creator.error.code||"");
+      out.tiktok.api_ok=code==="ok" && Boolean(creator&&creator.data);
+      if(out.tiktok.api_ok){
+        out.tiktok.creator={
+          username:String(creator.data.creator_username||""),
+          privacy_level_options:Array(creator.data.privacy_level_options||[])
+        };
+      }else{
+        out.tiktok.error="TikTok creator_info failed: "+JSON.stringify(creator).slice(0,900);
+      }
+    }catch(err){
+      out.tiktok.error=String(err).slice(0,900);
+    }
+  }else{
+    out.tiktok.error="TIKTOK_ACCESS_TOKEN belum diisi.";
+  }
+
+  out.ok=Boolean(out.webhook.meta_verify_token && out.instagram.configured && out.instagram.api_ok);
+  return json_(out);
+}
+
 function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
@@ -740,6 +807,7 @@ function doPost(e){
     if(!auth_(body))return json_({ok:false,error:"Unauthorized"});
     const a=body.action||"ingest";
     if(a==="healthcheck")return liveHealth_();
+    if(a==="social_health")return socialHealth_();
     if(a==="ingest")return ingest_(body.rows||[]);
     if(a==="repair_layout")return repairProspectLayout_();
     if(a==="send_queue")return sendQueue_(Number(body.limit||DAILY_SEND_LIMIT));

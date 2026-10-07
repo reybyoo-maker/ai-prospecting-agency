@@ -42,72 +42,55 @@ SENT -> FOLLOWUP_1 -> FOLLOWUP_2 -> FOLLOWUP_DONE
 
 Jika ada reply, follow-up berhenti. UNSUBSCRIBE menghentikan komunikasi.
 
-## Social comment -> DM
+## Social automation
 
-Apps Script sekarang menerima webhook Instagram dan memeriksa keyword yang disimpan di Script Property IG_COMMENT_KEYWORD (default REY MAU).
+Apps Script menerima webhook Instagram dan menangani dua jalur:
+1. Komentar dengan keyword pada `IG_COMMENT_KEYWORD` -> private reply ke commenter -> public comment reply -> pencatatan di **Social Leads**.
+2. Inbound Instagram DM -> auto-reply text -> pencatatan di **Social Leads**.
 
-Jika komentar cocok:
-Instagram comment -> private reply DM -> WhatsApp link -> Social Leads
+Script Properties untuk Instagram:
+- `META_VERIFY_TOKEN`
+- `WEBHOOK_TOKEN`
+- `IG_USER_ID`
+- `IG_ACCESS_TOKEN`
+- `IG_API_VERSION` (default `v26.0`)
+- `IG_MESSAGING_HOST` (default `https://graph.instagram.com`)
+- `IG_COMMENT_KEYWORD` (default `REY MAU`)
+- `IG_PUBLIC_COMMENT_REPLY`
+- `WA_NUMBER`
 
-Lead sosial dicatat di sheet baru Social Leads.
-
-Script Properties:
-- META_VERIFY_TOKEN
-- IG_USER_ID
-- IG_ACCESS_TOKEN
-- IG_API_VERSION (opsional)
-- IG_MESSAGING_HOST (opsional, default https://graph.instagram.com)
-- IG_COMMENT_KEYWORD (opsional, default REY MAU)
-- WA_NUMBER
-
-Private replies Instagram menggunakan comment ID dan tunduk pada aturan jendela waktu serta batas reply per komentar.
+Aksi webhook `social_health` melakukan pemeriksaan non-publish ke Instagram `/me` dan TikTok creator info, tanpa mengirim pesan atau posting.
 
 ### TikTok
 
-Sistem tidak memalsukan dukungan TikTok comment -> DM. Dokumentasi TikTok saat ini menyediakan akses komentar melalui Research API dan data portability untuk riwayat DM, tetapi tidak menyediakan endpoint publik yang setara untuk mengirim DM berdasarkan komentar. Karena itu jalur TikTok comment -> DM tidak diaktifkan dengan scraping atau endpoint tidak resmi.
+TikTok photo Direct Post didukung oleh Content Posting API. Foto dapat dikirim dari URL publik yang sudah diverifikasi oleh aplikasi, dan Direct Post memakai scope `video.publish`. Konten dari client yang belum diaudit dibatasi ke private viewing sampai proses audit selesai.
 
-## Content planning
+Comment -> DM TikTok tidak diaktifkan menggunakan scraping atau endpoint tidak resmi.
 
-Workflow content sekarang:
-Gemini -> content planning 7 hari -> 7 carousel x 7 slide -> commit file -> link masuk Google Sheets
+## Content publishing
 
-Sheet baru:
-Content Planning
+Workflow harian menghasilkan 7-day plan + carousel 7 slide, menyimpan asset ke GitHub, lalu otomatis mem-publish **Instagram** untuk konten hari berjalan.
 
-Kolom penting:
-- Tanggal
-- Platform
-- Tujuan
-- Topik
-- Hook
-- Caption
-- CTA
-- Slide Count
-- Carousel PDF URL
-- Carousel Cover URL
-- Slides JSON
-- Status
-- Publish Mode
+Alur:
+`Gemini -> 7-day content plan -> 7 carousel x 7 slide -> commit assets -> Google Sheets -> Instagram publish`
 
-Tidak ada langkah publish ke Instagram/TikTok di workflow.
+TikTok memiliki workflow `TikTok Publish (Manual Approval)` terpisah. Parameter tanggal approval sekarang dihormati oleh publisher, sehingga workflow dapat memilih tanggal yang diberikan.
 
-Carousel dibuat dengan AI content director yang merancang alur slide, hook, copy, dan visual direction, lalu renderer membuat layout 1080x1350 yang konsisten dan rapi.
-
-Google Gemini memiliki model image-generation khusus untuk aset visual, tetapi pricing saat ini mencantumkan model image-generation tanpa free tier. Pipeline utama karena itu memakai AI text + renderer carousel lokal agar tidak memicu biaya tersembunyi.
+Publisher melakukan retry dan mengecek seluruh asset URL terlebih dahulu sebelum meminta platform memproses konten.
 
 ## Google Sheets setup
 
-1. Tempel apps-script/Code.gs ke Apps Script yang terikat ke spreadsheet.
-2. Jalankan setup() satu kali dan izinkan akses.
-3. Pastikan Script Properties berikut sudah ada:
-   - WEBHOOK_TOKEN
-   - WA_NUMBER
-   - META_VERIFY_TOKEN
-   - IG_USER_ID
-   - IG_ACCESS_TOKEN
-   - IG_COMMENT_KEYWORD = REY MAU
-4. Karena perubahan Apps Script perlu masuk ke deployment Web App, buat versi deployment baru setelah mengganti Code.gs.
-5. Refresh spreadsheet. Menu Sonjaya akan muncul dan checkbox Manual Send tersedia.
+1. Tempel `apps-script/Code.gs` ke Apps Script yang terikat ke spreadsheet.
+2. Jalankan `setup()` satu kali dan izinkan akses.
+3. Pastikan Script Properties utama sudah ada.
+4. Deploy Apps Script sebagai Web App dan buat deployment baru setelah mengganti `Code.gs`.
+5. Jalankan endpoint healthcheck melalui workflow GitHub untuk memverifikasi webhook, Apps Script version, Instagram, TikTok (jika dikonfigurasi), dan Gemini.
+
+Sheet yang dibuat/dikelola oleh Apps Script:
+- `Prospects`
+- `Content`
+- `Content Planning`
+- `Social Leads`
 
 ## Automation safety
 
