@@ -1,0 +1,37 @@
+name: Sonjaya NOW - Content Bootstrap
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  run-now:
+    if: contains(github.event.head_commit.message, '[SONJAYA_NOW_CONTENT]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Generate 7-day content plan and carousel files
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          GEMINI_MODEL: "gemini-3.5-flash-lite"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: "main"
+        run: python content_runner.py
+      - name: Save content assets and manual-upload manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add carousels content_manifest.json
+          git diff --cached --quiet || git commit -m "chore: update immediate content assets"
+          git push
+      - name: Content Studio complete
+        run: echo "Content assets ready for manual upload. No Instagram/TikTok auto-publishing."
