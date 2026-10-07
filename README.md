@@ -20,10 +20,11 @@ Alur:
 ### Automatic email
 Email pertama sekarang **tidak lagi manual**.
 
-Apps Script membuat satu sales cycle terjadwal setiap 2 jam:
-1. scan reply terbaru,
-2. proses follow-up yang sudah jatuh tempo,
-3. kirim sampai **30 initial email READY** dengan prioritas skor tertinggi.
+GitHub Actions menjalankan satu sales cycle setiap 2 jam:
+1. discovery + scoring + queueing lead baru,
+2. scan reply terbaru,
+3. proses follow-up yang sudah jatuh tempo,
+4. kirim sampai **30 initial email READY** dengan prioritas skor tertinggi.
 
 Setelah initial email berhasil:
 `SENT -> FOLLOWUP_1 (+2 hari) -> FOLLOWUP_2 (+5 hari) -> FOLLOWUP_3 (+9 hari) -> FOLLOWUP_DONE`
@@ -149,7 +150,7 @@ Kolom utama Prospects:
 
 Sales discovery tetap menggunakan GitHub Actions terjadwal. Scheduled workflows berjalan dari default branch dan dapat mengalami delay ketika load GitHub tinggi, sehingga sistem tidak menjanjikan ketepatan detik; interval 2 jam tetap menjadi target jadwal.
 
-Apps Script menjadi scheduler untuk pengiriman awal, follow-up, dan reply detection.
+GitHub Actions menjadi satu-satunya scheduler Sales. Apps Script hanya menjadi execution layer untuk Google Sheets dan Gmail.
 
 ## Social platforms
 
