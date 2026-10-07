@@ -261,7 +261,7 @@ def validate_content_plan(posts: list[dict]) -> None:
                 errors.append(f"Day {day} slide {slide_no}: missing content.")
             if not 3 <= len(title.split()) <= 14:
                 errors.append(f"Day {day} slide {slide_no}: title length out of range.")
-            min_body_words = 3 if slide_no == 1 else 12
+            min_body_words = 3 if slide_no in (1, 7) else 12
             if not min_body_words <= len(body.split()) <= 60:
                 errors.append(f"Day {day} slide {slide_no}: body length out of range.")
         if len(str(post.get("hook") or "").strip()) < 18:
