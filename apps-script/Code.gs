@@ -278,7 +278,8 @@ function liveHealth_(){
     sheets:{
       prospects:names.indexOf(SHEET_NAME)>=0,
       content_planning:names.indexOf(CONTENT_PLAN_SHEET)>=0,
-      content:names.indexOf(CONTENT_SHEET)>=0
+      content:names.indexOf(CONTENT_SHEET)>=0,
+      automation_log:names.indexOf(AUTOMATION_LOG_SHEET)>=0
     },
     properties:{
       webhook_token:Boolean(props.getProperty("WEBHOOK_TOKEN")),
@@ -762,7 +763,8 @@ function salesAutomation_(){
     try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
     try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
     const details=logSalesCycle_(replies,sends,followups);
-    return json_({ok:true,...details});
+    const cycleOk=Boolean(details && details.replies && details.replies.ok && details.sends && details.sends.ok && details.followups && details.followups.ok);
+    return json_({ok:cycleOk,cycle_status:cycleOk?"OK":"PARTIAL_OR_ERROR",replies:details.replies,sends:details.sends,followups:details.followups});
   }finally{
     try{lock.releaseLock();}catch(e){}
   }
