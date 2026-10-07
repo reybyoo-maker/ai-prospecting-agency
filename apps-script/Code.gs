@@ -11,7 +11,8 @@ const MANUAL_SEND_COL = "Manual Send";
 const SEND_RESULT_COL = "Send Result";
 const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan","Pilar Konten","Script Lengkap","Slide 1 URL","Slide 2 URL","Slide 3 URL","Slide 4 URL","Slide 5 URL","Slide 6 URL","Slide 7 URL","Slide 1 Preview","Slide 2 Preview","Slide 3 Preview","Slide 4 Preview","Slide 5 Preview","Slide 6 Preview","Slide 7 Preview"];
-const SOCIAL_LEADS_SHEET = "Social Leads";
+const AUTOMATION_LOG_SHEET = "Automation Log";
+const AUTOMATION_LOG_HEADERS = ["Tanggal","Cycle","Initial Sent","Follow-ups Sent","Replies Processed","Errors","Quota Before","Quota After","Status","Detail"];
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
 const CODE_VERSION = "2026-10-08.1";
 // Production social automation handlers are enabled in this version.
@@ -104,6 +105,27 @@ function configureProspectControls_(sh){
       ).build()
     );
   }
+}
+
+function automationLogSheet_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  let sh=ss.getSheetByName(AUTOMATION_LOG_SHEET);
+  if(!sh)sh=ss.insertSheet(AUTOMATION_LOG_SHEET);
+  ensureHeaders_(sh,AUTOMATION_LOG_HEADERS);
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,AUTOMATION_LOG_HEADERS.length).setFontWeight("bold");
+  sh.getDataRange().setWrap(true);
+  sh.setColumnWidth(1,145);
+  sh.setColumnWidth(2,150);
+  sh.setColumnWidth(3,105);
+  sh.setColumnWidth(4,120);
+  sh.setColumnWidth(5,120);
+  sh.setColumnWidth(6,90);
+  sh.setColumnWidth(7,105);
+  sh.setColumnWidth(8,105);
+  sh.setColumnWidth(9,100);
+  sh.setColumnWidth(10,520);
+  return sh;
 }
 
 function contentPlanningSheet_(){
@@ -709,7 +731,7 @@ function removeLegacyAutomationTriggers_(){
 }
 
 function setup(){
-  sheet_();contentSheet_();contentPlanningSheet_();
+  sheet_();contentSheet_();contentPlanningSheet_();automationLogSheet_();
   removeLegacyAutomationTriggers_();
   // Sales scheduling is owned by GitHub Actions every 2 hours.
   // No Apps Script time trigger is created here.
@@ -722,6 +744,29 @@ function systemStatus(){
   ui.alert(liveHealth_().getContent());
 }
 
+function logSalesCycle_(replies,sends,followups){
+  const sh=automationLogSheet_();
+  function obj(v){try{return JSON.parse(v.getContent());}catch(e){return {ok:false,error:String(v&&v.getContent?v.getContent():"unknown")};}}
+  const r=obj(replies),s=obj(sends),f=obj(followups);
+  const quotaBefore=s.quota_before!==undefined?s.quota_before:"";
+  const quotaAfter=s.quota_after!==undefined?s.quota_after:"";
+  const errors=(Number(s.errors||0)+(!r.ok?1:0)+(!f.ok?1:0));
+  const status=errors===0?"OK":"PARTIAL";
+  sh.appendRow([
+    now_(),
+    "GitHub Actions / 2h",
+    Number(s.sent||0),
+    Number(f.processed||0),
+    Number(r.replied||0),
+    errors,
+    quotaBefore,
+    quotaAfter,
+    status,
+    JSON.stringify({replies:r,sends:s,followups:f}).slice(0,5000)
+  ]);
+  return {replies:r,sends:s,followups:f};
+}
+
 function salesAutomation_(){
   const lock=LockService.getScriptLock();
   if(!lock.tryLock(1000))return json_({ok:true,skipped:true,reason:"another cycle is running"});
@@ -731,7 +776,8 @@ function salesAutomation_(){
     try{replies=scanReplies_(40);}catch(e){replies=json_({ok:false,error:String(e)});}
     try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
     try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
-    return json_({ok:true,replies:replies,sends:sends,followups:followups});
+    const details=logSalesCycle_(replies,sends,followups);
+    return json_({ok:true,...details});
   }finally{
     try{lock.releaseLock();}catch(e){}
   }
