@@ -1,4 +1,4 @@
-name: Sonjaya Daily Content + Auto Publishing
+name: Sonjaya Daily Content Studio
 
 on:
   workflow_dispatch:
@@ -38,9 +38,5 @@ jobs:
       - name: Wait for public GitHub asset URLs
         run: sleep 10
 
-      - name: Auto-publish today's post to social channels
-        env:
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
-          AUTO_PUBLISH_PLATFORMS: "instagram"
-        run: python social_publisher.py
+      - name: Content Studio complete
+        run: echo "All content assets and scripts are stored for manual upload. No Instagram/TikTok auto-publishing is enabled."
