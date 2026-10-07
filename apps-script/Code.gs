@@ -756,7 +756,7 @@ function socialHealth_(){
       deployed_web_app:"doGet/doPost handlers present"
     },
     instagram:{
-      configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")&&props.getProperty("IG_USER_ID")),
+      configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
       host:configuredHost||"auto-detect",
       api_version:props.getProperty("IG_API_VERSION")||"v26.0",
       user_id_configured:Boolean(props.getProperty("IG_USER_ID")),
@@ -780,23 +780,36 @@ function socialHealth_(){
     for(let i=0;i<hosts.length;i++){
       const host=hosts[i];
       try{
-        const id=String(props.getProperty("IG_USER_ID")||"");
-        let me;
+        let me=null;
         if(host==="https://graph.instagram.com"){
           me=instagramGetHost_(host,"/me",{fields:"id,username"});
-        }else{
-          if(!id) throw new Error("IG_USER_ID diperlukan untuk graph.facebook.com");
-          me=instagramGetHost_(host,"/"+encodeURIComponent(id),{fields:"id,username,name"});
+        }else if(host==="https://graph.facebook.com"){
+          const pages=instagramGetHost_(host,"/me/accounts",{
+            fields:"id,name,instagram_business_account{id,username}"
+          });
+          const data=Array.isArray(pages&&pages.data)?pages.data:[];
+          for(let j=0;j<data.length;j++){
+            const iga=data[j]&&data[j].instagram_business_account;
+            if(iga&&iga.id){
+              me={id:iga.id,username:iga.username||"",source:"instagram_business_account",page_id:data[j].id};
+              break;
+            }
+          }
+          if(!me)lastError="Facebook /me/accounts returned no instagram_business_account: "+JSON.stringify(pages||{}).slice(0,900);
         }
         if(me&&me.id){
           out.instagram.api_ok=true;
           out.instagram.host=host;
-          out.instagram.account={id:String(me.id),username:String(me.username||me.name||"")};
+          out.instagram.account={
+            id:String(me.id),
+            username:String(me.username||me.name||"")
+          };
+          props.setProperty("IG_USER_ID",String(me.id));
           props.setProperty("IG_GRAPH_HOST",host);
           props.setProperty("IG_MESSAGING_HOST",host);
           break;
         }
-        lastError=JSON.stringify(me||{}).slice(0,900);
+        if(!lastError)lastError=JSON.stringify(me||{}).slice(0,900);
       }catch(err){
         lastError=String(err).slice(0,900);
       }
@@ -805,7 +818,7 @@ function socialHealth_(){
       out.instagram.error="Instagram API probe gagal pada semua host. "+lastError;
     }
   }else{
-    out.instagram.error="IG_ACCESS_TOKEN dan IG_USER_ID belum lengkap.";
+    out.instagram.error="IG_ACCESS_TOKEN belum diisi di Script Properties.";
   }
 
   if(out.tiktok.configured){
@@ -828,7 +841,7 @@ function socialHealth_(){
     out.tiktok.error="TIKTOK_ACCESS_TOKEN belum diisi.";
   }
 
-  out.ok=Boolean(out.webhook.meta_verify_token && out.instagram.configured && out.instagram.api_ok);
+  out.ok=Boolean(out.webhook.meta_verify_token && out.instagram.api_ok);
   return json_(out);
 }
 
