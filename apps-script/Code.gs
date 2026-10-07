@@ -800,7 +800,13 @@ function socialHealth_(){
 }
 
 function socialHealth(){
-  return socialHealth_();
+  const result = socialHealth_();
+  try {
+    SpreadsheetApp.getUi().alert("SOCIAL HEALTH RESULT\n\n" + result);
+  } catch (e) {
+    console.log(result);
+  }
+  return result;
 }
 
 function doPost(e){
