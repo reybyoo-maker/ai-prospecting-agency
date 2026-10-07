@@ -973,8 +973,8 @@ function ingestContent_(rows){
         r.date,r.platform,r.format||"CAROUSEL_7_SLIDES",r.objective||"",
         r.topic||"",r.hook||"",r.caption||"",r.cta||"",
         Number(r.slide_count||7),r.carousel_pdf_url||"",r.carousel_cover_url||"",
-        r.slides_json||"",r.status||"PLANNED","PLANNING_ONLY",
-        r.catatan||"Tidak diupload otomatis"
+        r.slides_json||"",r.status||"PLANNED",String(r.publish_mode||"PLANNING_ONLY"),
+        r.catatan||"Content plan"
       ]);
       existing[key]=true; addedPlanning++;
     });
