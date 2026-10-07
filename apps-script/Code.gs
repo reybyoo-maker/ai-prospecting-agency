@@ -263,9 +263,10 @@ function liveHealth_(){
     },
     email:{remaining_daily_quota:quota,batch_target:BATCH_SEND_LIMIT,max_daily_target:MAX_DAILY_AUTOMATED_SENDS},
     triggers:{
-      salesAutomation:handlers.indexOf("salesAutomation_")>=0,
+      githubSalesScheduler:true,
       legacyHourly:handlers.indexOf("hourlyAutomation_")>=0,
-      legacyManualSend:handlers.indexOf("manualSendOnEdit_")>=0
+      legacyManualSend:handlers.indexOf("manualSendOnEdit_")>=0,
+      legacySalesTrigger:handlers.indexOf("salesAutomation_")>=0
     }
   });
 }
@@ -687,10 +688,10 @@ function removeLegacyAutomationTriggers_(){
 function setup(){
   sheet_();contentSheet_();contentPlanningSheet_();
   removeLegacyAutomationTriggers_();
-  const hasSalesTrigger=ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()==="salesAutomation_";});
-  if(!hasSalesTrigger)ScriptApp.newTrigger("salesAutomation_").timeBased().everyHours(2).create();
+  // Sales scheduling is owned by GitHub Actions every 2 hours.
+  // No Apps Script time trigger is created here.
   backfillProspectControls_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME));
-  return "Sonjaya sales automation ready | version "+CODE_VERSION;
+  return "Sonjaya sheets ready | scheduling: GitHub Actions every 2 hours | version "+CODE_VERSION;
 }
 
 function systemStatus(){
