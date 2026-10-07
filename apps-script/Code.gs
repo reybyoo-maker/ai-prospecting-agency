@@ -10,7 +10,7 @@ const AGENCY_NAME = "Sonjaya Remote Business Services";
 const MANUAL_SEND_COL = "Manual Send";
 const SEND_RESULT_COL = "Send Result";
 const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
-const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan","Pilar Konten","Script Lengkap","Slide 1 URL","Slide 2 URL","Slide 3 URL","Slide 4 URL","Slide 5 URL","Slide 6 URL","Slide 7 URL"];
+const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan","Pilar Konten","Script Lengkap","Slide 1 URL","Slide 2 URL","Slide 3 URL","Slide 4 URL","Slide 5 URL","Slide 6 URL","Slide 7 URL","Slide 1 Preview","Slide 2 Preview","Slide 3 Preview","Slide 4 Preview","Slide 5 Preview","Slide 6 Preview","Slide 7 Preview"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
 const CODE_VERSION = "2026-10-08.1";
@@ -114,6 +114,23 @@ function contentPlanningSheet_(){
   sh.setFrozenRows(1);
   sh.getRange(1,1,1,CONTENT_PLAN_HEADERS.length).setFontWeight("bold");
   sh.getDataRange().setWrap(true);
+  sh.setColumnWidth(1,105);
+  sh.setColumnWidth(2,95);
+  sh.setColumnWidth(3,135);
+  sh.setColumnWidth(4,180);
+  sh.setColumnWidth(5,260);
+  sh.setColumnWidth(6,300);
+  sh.setColumnWidth(7,420);
+  sh.setColumnWidth(8,260);
+  sh.setColumnWidth(10,230);
+  sh.setColumnWidth(11,230);
+  sh.setColumnWidth(16,220);
+  sh.setColumnWidth(17,520);
+  for(let col=18;col<=24;col++)sh.setColumnWidth(col,230);
+  for(let col=25;col<=31;col++)sh.setColumnWidth(col,180);
+  if(sh.getLastRow()>=2){
+    sh.setRowHeights(2,sh.getLastRow()-1,180);
+  }
   return sh;
 }
 
@@ -663,7 +680,13 @@ function ingestContent_(rows){
     set("Catatan",r.catatan||"Content Studio | upload manual"); set("Pilar Konten",r.content_pillar||"");
     set("Script Lengkap",r.script||"");
     const urls=Array.isArray(r.slide_urls)?r.slide_urls:[];
-    for(let i=0;i<7;i++)set("Slide "+(i+1)+" URL",urls[i]||"");
+    for(let i=0;i<7;i++){
+      const url=String(urls[i]||"").trim();
+      set("Slide "+(i+1)+" URL",url);
+      if(idx["Slide "+(i+1)+" Preview"]!==undefined && url){
+        row[idx["Slide "+(i+1)+" Preview"]]="=IMAGE(\""+url.replace(/"/g,'""')+"\")";
+      }
+    }
     sh.appendRow(row); existing[key]=true; added++;
   });
   return json_({ok:true,added:added,duplicates:duplicates});
