@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.9";
+const CODE_VERSION = "2026-10-07.10";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -1060,16 +1060,75 @@ function processFollowups_(limit){
   return json_({ok:true,processed:processed,sent_today:sentToday+processed,remaining:remaining});
 }
 
+function geminiReply_(business,service,pain,originalSubject,originalBody,inboundBody,waNumber){
+  const key=String(PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY")||"").trim();
+  if(!key)return "";
+  const model=String(PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL")||"gemini-3.8-flash").trim();
+  const wa=waNumber?"https://wa.me/"+waNumber+"?text="+encodeURIComponent("Halo Rey, saya dari "+business+". Saya membalas email tentang kebutuhan "+service+". Saya ingin melanjutkan pembahasannya."):"";
+  const prompt=[
+    "Kamu adalah sales agent Sonjaya AI.",
+    "Balas email prospek berdasarkan isi email mereka. Balasan harus terasa benar-benar nyambung dengan apa yang mereka tulis, bukan template generik.",
+    "Tujuan akhir: arahkan percakapan ke WhatsApp Rey untuk pembahasan lebih lanjut.",
+    "Aturan:",
+    "- Jawab pertanyaan/keberatan yang benar-benar ditulis prospek.",
+    "- Jangan mengarang harga, hasil, klien, fitur, atau fakta yang tidak tersedia.",
+    "- Jika informasi belum cukup, katakan singkat apa yang perlu diketahui.",
+    "- Gunakan Bahasa Indonesia yang natural, profesional, ramah, tidak kaku.",
+    "- Jangan menyebut bahwa kamu AI.",
+    "- Jangan menggunakan heading atau bullet list kecuali memang membantu menjawab.",
+    "- Tutup dengan ajakan lanjut ke WhatsApp.",
+    "- Sertakan nomor WhatsApp Rey: +"+waNumber+".",
+    "- Sertakan link WhatsApp: "+wa+".",
+    "- Jangan mengubah URL tersebut.",
+    "",
+    "DATA LEAD:",
+    "Bisnis: "+business,
+    "Layanan yang terdeteksi: "+service,
+    "Pain point: "+pain,
+    "Subject email awal: "+originalSubject,
+    "Body email awal: "+originalBody,
+    "",
+    "REPLY PROSPEK:",
+    inboundBody,
+    "",
+    "Tulis hanya body email balasan yang siap dikirim."
+  ].join("\n");
+
+  const url="https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent";
+  const payload={
+    contents:[{parts:[{text:prompt}]}],
+    generationConfig:{maxOutputTokens:700}
+  };
+  const res=UrlFetchApp.fetch(url,{
+    method:"post",
+    contentType:"application/json; charset=UTF-8",
+    headers:{"x-goog-api-key":key},
+    payload:JSON.stringify(payload),
+    muteHttpExceptions:true
+  });
+  const code=res.getResponseCode(),txt=res.getContentText();
+  if(code<200||code>=300)throw new Error("Gemini HTTP "+code+": "+txt.slice(0,700));
+  const data=JSON.parse(txt||"{}");
+  const parts=((data.candidates||[])[0]||{}).content&&((data.candidates||[])[0].content.parts||[]);
+  return parts.map(function(p){return String(p.text||"");}).join("").trim();
+}
+
+function fallbackReply_(business,service,inboundBody,waNumber){
+  const wa=waNumber?"https://wa.me/"+waNumber+"?text="+encodeURIComponent("Halo Rey, saya dari "+business+". Saya membalas email dan ingin melanjutkan pembahasannya tentang "+service+"."):"";
+  const context=String(inboundBody||"").replace(/\\s+/g," ").trim().slice(0,500);
+  return "Terima kasih sudah membalas, "+business+". Saya sudah membaca pesan Anda: \""+context+"\".\\n\\nAgar saya bisa menyesuaikan pembahasan dengan kebutuhan Anda, kita lanjutkan langsung melalui WhatsApp Rey.\\n\\nNomor WhatsApp Rey: +"+waNumber+"\\n"+wa+"\\n\\nSilakan lanjutkan di sana, nanti kita bahas detailnya.";
+}
+
 function scanReplies_(limit){
   const sh=sheet_(),last=sh.getLastRow();
   if(last<2)return json_({ok:true,replied:0});
   const threads=GmailApp.search("in:inbox newer_than:14d -from:me",0,100);
-  const owner=ownerEmail_();let replied=0,matched=0;
+  const owner=ownerEmail_();let replied=0,matched=0,aiReplied=0,aiFallback=0;
   for(let ti=0;ti<threads.length&&replied<limit;ti++){
     const thread=threads[ti],subject=String(thread.getFirstMessageSubject()||"");
     const m=subject.match(/\\[SJ-([a-f0-9]{12})\\]/i);
     let row=-1;
-    if(m) row=findRowById_(m[1]);
+    if(m)row=findRowById_(m[1]);
 
     const msgs=thread.getMessages();let inbound=null;
     for(let i=msgs.length-1;i>=0;i--){
@@ -1080,7 +1139,7 @@ function scanReplies_(limit){
 
     if(row<2){
       const fromHeader=String(inbound.getFrom()||"");
-      const emailMatch=fromHeader.match(/<([^>]+)>/) || fromHeader.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);
+      const emailMatch=fromHeader.match(/<([^>]+)>/)||fromHeader.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);
       const inboundEmail=(emailMatch?(emailMatch[1]||emailMatch[0]):fromHeader).toLowerCase().trim();
       row=findRowByEmail_(inboundEmail);
     }
@@ -1090,8 +1149,9 @@ function scanReplies_(limit){
     const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
     if(["WA_HANDOFF","OPTOUT"].indexOf(status)>=0)continue;
 
-    const body=String(inbound.getPlainBody()||"").slice(0,5000),upper=body.toUpperCase();
-    if(upper.indexOf("UNSUBSCRIBE")!==-1){
+    const body=String(inbound.getPlainBody()||"").slice(0,5000).trim();
+    if(!body)continue;
+    if(body.toUpperCase().indexOf("UNSUBSCRIBE")!==-1){
       sh.getRange(row,col_("Status")).setValue("OPTOUT");
       sh.getRange(row,col_("Opt Out")).setValue("YES");
       continue;
@@ -1100,22 +1160,34 @@ function scanReplies_(limit){
     const business=String(sh.getRange(row,col_("Nama bisnis")).getValue()||"Perusahaan");
     const email=String(sh.getRange(row,col_("Email")).getValue()||"");
     const service=String(sh.getRange(row,col_("Layanan direkomendasikan")).getValue()||"automation AI");
+    const pain=String(sh.getRange(row,col_("Pain point")).getValue()||"");
+    const originalSubject=String(sh.getRange(row,col_("Subject")).getValue()||"");
+    const originalBody=String(sh.getRange(row,col_("Body")).getValue()||"").slice(0,6000);
     const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\\b/i.test(body)?"INTERESTED":"REPLIED";
     const waNumber=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\\D/g,"");
-    const wa=waLink_(business,email);
-    const waMessage="Halo Rey, saya dari "+business+". Saya membalas email tentang kebutuhan "+service+". Saya ingin membahas detailnya.";
-    const directWa=waNumber?"https://wa.me/"+waNumber+"?text="+encodeURIComponent(waMessage):"";
-    const replyText=waNumber
-      ? "Terima kasih sudah membalas, "+business+".\\n\\nAgar lebih cepat, kita lanjutkan pembahasannya langsung ke WhatsApp Rey.\\n\\nNomor WhatsApp Rey: +"+waNumber+"\\n\\nKlik untuk langsung membuka chat:\\n"+directWa+"\\n\\nPesan sudah saya siapkan agar tinggal kirim:\\n\\""+waMessage+"\\"\\n\\nSalam,\\nRey\\n"+AGENCY_NAME;
-      : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\\n\\nSalam,\\nRey\\n"+AGENCY_NAME;    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
-    sh.getRange(row,col_("Status")).setValue(wa?"WA_HANDOFF":"REPLIED");
+
+    let replyText="";
+    try{
+      replyText=geminiReply_(business,service,pain,originalSubject,originalBody,body,waNumber);
+      if(replyText)aiReplied++;
+    }catch(err){
+      console.log("Gemini reply failed: "+String(err));
+    }
+    if(!replyText){
+      replyText=fallbackReply_(business,service,body,waNumber);
+      aiFallback++;
+    }
+
+    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
+    sh.getRange(row,col_("Status")).setValue("WA_HANDOFF");
     sh.getRange(row,col_("Reply At")).setValue(now_());
     sh.getRange(row,col_("Reply Intent")).setValue(intent);
     sh.getRange(row,col_("Last Reply")).setValue(body.slice(0,1500));
-    sh.getRange(row,col_("WhatsApp Handoff")).setValue(wa);
+    sh.getRange(row,col_("WhatsApp Handoff")).setValue(waNumber?"https://wa.me/"+waNumber:"");
+    sh.getRange(row,col_("Last Error")).clearContent();
     replied++;
   }
-  return json_({ok:true,replied:replied,matched:matched,scanned_threads:threads.length});
+  return json_({ok:true,replied:replied,matched:matched,ai_replied:aiReplied,ai_fallback:aiFallback,scanned_threads:threads.length});
 }
 function ingestContent_(rows){
   const planningRows=rows.filter(function(r){
