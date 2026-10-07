@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   run-now:
-    if: contains(github.event.head_commit.message, '[SONJAYA_NOW_CONTENT_RETRY]')
+    if: contains(github.event.head_commit.message, '[SONJAYA_NOW_CONTENT_RETRY2]')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
