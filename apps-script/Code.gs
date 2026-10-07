@@ -690,6 +690,9 @@ function sendSelectedRows_(){
 
 function doGet(e){
   const p=(e&&e.parameter)||{};
+  if(String(p.check||"").toLowerCase()==="social"){
+    return socialHealth_();
+  }
   const verify=PropertiesService.getScriptProperties().getProperty("META_VERIFY_TOKEN")||"";
   if(p["hub.mode"]==="subscribe" && p["hub.verify_token"]===verify && p["hub.challenge"]){
     return ContentService.createTextOutput(p["hub.challenge"]);
