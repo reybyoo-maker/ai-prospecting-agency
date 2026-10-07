@@ -176,21 +176,6 @@ function auth_(body){
 }
 function ownerEmail_(){return String(Session.getEffectiveUser().getEmail()||"").toLowerCase();}
 
-function waLink_(business,email){
-  const number=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\D/g,"");
-  if(!number)return "";
-  const text="Halo Rey, saya dari "+business+". Saya membalas email tentang kebutuhan bisnis kami. Email: "+email;
-  return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
-}
-
-function socialWaLink_(username){
-  const number=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\D/g,"");
-  if(!number)return "";
-  const name=String(username||"Instagram lead").replace(/^@/,"");
-  const text="Halo Rey, saya dari Instagram @"+name+". Saya komen REY MAU dan ingin info tentang jasa Sonjaya.";
-  return "https://wa.me/"+number+"?text="+encodeURIComponent(text);
-}
-
 function onOpen(){
   SpreadsheetApp.getUi().createMenu("Sonjaya")
     .addItem("Status Sistem","systemStatus")
