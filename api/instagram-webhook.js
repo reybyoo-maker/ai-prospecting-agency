@@ -1,50 +1,61 @@
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx9fqbPZap1JN2dGrnutAYbZ_8dX-q1UNshnADmNGmAIUKijz8fG6Pnrbra2d1cVgyA/exec";
 
-export default async function handler(req, res) {
-  if (req.method === "GET") {
-    const mode = req.query?.["hub.mode"];
-    const challenge = req.query?.["hub.challenge"];
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
 
-    // Meta's verification handshake: return the raw challenge immediately.
-    if (mode === "subscribe" && challenge) {
-      return res.status(200).send(String(challenge));
-    }
+export async function GET(request) {
+  const url = new URL(request.url);
+  const mode = url.searchParams.get("hub.mode");
+  const challenge = url.searchParams.get("hub.challenge");
 
-    return res.status(200).send("ok");
+  if (mode === "subscribe" && challenge) {
+    return new Response(challenge, {
+      status: 200,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
   }
 
-  if (req.method === "POST") {
-    try {
-      const body =
-        typeof req.body === "string"
-          ? req.body
-          : JSON.stringify(req.body ?? {});
+  return new Response("ok", { status: 200 });
+}
 
-      const upstream = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-      });
+export async function POST(request) {
+  try {
+    const body = await request.text();
 
-      if (!upstream.ok) {
-        const detail = await upstream.text().catch(() => "");
-        return res.status(502).json({
+    const upstream = await fetch(APPS_SCRIPT_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => "");
+      return jsonResponse(
+        {
           ok: false,
           error: "Apps Script upstream failed",
           status: upstream.status,
           detail: detail.slice(0, 500),
-        });
-      }
+        },
+        502
+      );
+    }
 
-      return res.status(200).send("EVENT_RECEIVED");
-    } catch (error) {
-      return res.status(502).json({
+    return new Response("EVENT_RECEIVED", {
+      status: 200,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  } catch (error) {
+    return jsonResponse(
+      {
         ok: false,
         error: String(error),
-      });
-    }
+      },
+      502
+    );
   }
-
-  res.setHeader("Allow", "GET, POST");
-  return res.status(405).send("Method Not Allowed");
 }
