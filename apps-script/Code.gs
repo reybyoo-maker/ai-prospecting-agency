@@ -1130,7 +1130,7 @@ function scanReplies_(limit){
   const owner=ownerEmail_();let replied=0,matched=0,aiReplied=0,aiFallback=0;
   for(let ti=0;ti<threads.length&&replied<limit;ti++){
     const thread=threads[ti],subject=String(thread.getFirstMessageSubject()||"");
-    const m=subject.match(/\\[SJ-([a-f0-9]{12})\\]/i);
+    const m=subject.match(/\[SJ-([a-f0-9]{12})\]/i);
     let row=-1;
     if(m)row=findRowById_(m[1]);
 
