@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.6";
+const CODE_VERSION = "2026-10-07.7";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -145,7 +145,9 @@ function logSocialLead_(row){
 function setupSocialAutomation_(){
   const props=PropertiesService.getScriptProperties();
   if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("IG_PUBLIC_COMMENT_REPLY"))props.setProperty("IG_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
   if(!props.getProperty("TIKTOK_COMMENT_KEYWORD"))props.setProperty("TIKTOK_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("TIKTOK_PUBLIC_COMMENT_REPLY"))props.setProperty("TIKTOK_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
   if(!props.getProperty("TIKTOK_API_VERSION"))props.setProperty("TIKTOK_API_VERSION","v1.3");
   socialLeadsSheet_();
   return json_({ok:true,message:"Social automation defaults ready. Add platform credentials in Script Properties."});
@@ -233,15 +235,12 @@ function handleInstagramWebhook_(body){
 }
 
 function handleInstagramCommentsOnly_(body){
-  let processed=0,matched=0,dmSent=0,errors=0;
+  let processed=0,matched=0,dmSent=0,publicReply=0,errors=0;
   const entries=Array.isArray(body&&body.entry)?body.entry:[];
   entries.forEach(function(entry){
     const changes=Array.isArray(entry&&entry.changes)?entry.changes:[];
     changes.forEach(function(change){
       const field=String(change.field||"").toLowerCase();
-      if(field==="messages" || field==="messaging_postbacks" || field==="message"){
-        return;
-      }
       if(field!=="comments")return;
       const v=change.value||{}, commentId=String(v.id||v.comment_id||""), text=String(v.text||"");
       const from=v.from||{}, userId=String(from.id||""), username=String(from.username||from.name||"");
@@ -254,9 +253,24 @@ function handleInstagramCommentsOnly_(body){
       try{
         const msg=socialReplyText_("Instagram",username);
         const result=sendInstagramPrivateReply_(commentId,msg);
-        dmStatus="DM_SENT"; note=JSON.stringify(result).slice(0,800); dmSent++;
+        dmStatus="DM_SENT";
+        note="DM="+JSON.stringify(result).slice(0,500);
+        dmSent++;
+        const publicText=PropertiesService.getScriptProperties().getProperty("IG_PUBLIC_COMMENT_REPLY")||"Siap! 👋 Cek DM ya.";
+        try{
+          const publicResult=sendInstagramPublicReply_(commentId,publicText);
+          publicReply++;
+          dmStatus="DM_SENT_PUBLIC_REPLY_SENT";
+          note+=" | PUBLIC="+JSON.stringify(publicResult).slice(0,500);
+        }catch(publicErr){
+          dmStatus="DM_SENT_PUBLIC_REPLY_ERROR";
+          note+=" | PUBLIC_ERROR="+String(publicErr).slice(0,500);
+          errors++;
+        }
       }catch(err){
-        dmStatus="DM_ERROR"; note=String(err).slice(0,800); errors++;
+        dmStatus="DM_ERROR";
+        note=String(err).slice(0,800);
+        errors++;
       }
       logSocialLead_({
         "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
@@ -273,7 +287,7 @@ function handleInstagramCommentsOnly_(body){
       });
     });
   });
-  return {processed:processed,matched:matched,dm_sent:dmSent,errors:errors};
+  return {processed:processed,matched:matched,dm_sent:dmSent,public_reply:publicReply,errors:errors};
 }
 
 function tiktokBaseUrl_(){
@@ -535,6 +549,18 @@ function sendInstagramPrivateReply_(commentId,text){
   });
 }
 
+function sendInstagramPublicReply_(commentId,text){
+  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
+  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
+  const host=PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com";
+  if(!token)throw new Error("INSTAGRAM_NOT_CONFIGURED");
+  return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(commentId)+"/replies",{
+    method:"post",
+    payload:{message:String(text||"").slice(0,1000)},
+    headers:{Authorization:"Bearer "+token},
+    muteHttpExceptions:true
+  });
+}
 
 function contentPlanningSheet_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
@@ -692,7 +718,12 @@ function liveHealth_(){
       meta_verify_token:Boolean(props.getProperty("META_VERIFY_TOKEN")),
       ig_user_id:Boolean(props.getProperty("IG_USER_ID")),
       ig_access_token:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
-      ig_comment_keyword:Boolean(props.getProperty("IG_COMMENT_KEYWORD"))
+      ig_comment_keyword:Boolean(props.getProperty("IG_COMMENT_KEYWORD")),
+      ig_content_publish:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
+      tiktok_business_id:Boolean(props.getProperty("TIKTOK_BUSINESS_ID")),
+      tiktok_access_token:Boolean(props.getProperty("TIKTOK_ACCESS_TOKEN")),
+      tiktok_comment_keyword:Boolean(props.getProperty("TIKTOK_COMMENT_KEYWORD")),
+      tiktok_publish_note:"TikTok photo auto-posting requires a verified public URL prefix and video.publish authorization."
     },
     triggers:{
       hourlyAutomation:handlers.indexOf("hourlyAutomation_")>=0,
@@ -919,8 +950,14 @@ function scanReplies_(limit){
 }
 
 function ingestContent_(rows){
-  const planningRows=rows.filter(function(r){return String(r.publish_mode||"") === "PLANNING_ONLY";});
-  const legacyRows=rows.filter(function(r){return String(r.publish_mode||"") !== "PLANNING_ONLY";});
+  const planningRows=rows.filter(function(r){
+    const mode=String(r.publish_mode||"");
+    return mode==="PLANNING_ONLY" || mode==="AUTO_PUBLISH_DAILY";
+  });
+  const legacyRows=rows.filter(function(r){
+    const mode=String(r.publish_mode||"");
+    return mode!=="PLANNING_ONLY" && mode!=="AUTO_PUBLISH_DAILY";
+  });
   let addedPlanning=0,addedLegacy=0;
 
   if(planningRows.length){
@@ -972,18 +1009,223 @@ function urlFetchJson_(url,options){
   return data;
 }
 
-function publishInstagramPhoto_(imageUrl,caption){
-  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
-  const userId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
+function instagramGraphBase_(){
   const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  if(!token||!userId)return {ok:false,error:"INSTAGRAM_NOT_CONFIGURED"};
-  const base="https://graph.facebook.com/"+version+"/"+encodeURIComponent(userId);
-  const container=urlFetchJson_(base+"/media?image_url="+encodeURIComponent(imageUrl)+"&caption="+encodeURIComponent(caption||"")+"&access_token="+encodeURIComponent(token),{method:"post",muteHttpExceptions:true});
-  const creationId=container.id;
-  if(!creationId)return {ok:false,error:"Instagram container not created"};
-  Utilities.sleep(5000);
-  const published=urlFetchJson_(base+"/media_publish?creation_id="+encodeURIComponent(creationId)+"&access_token="+encodeURIComponent(token),{method:"post",muteHttpExceptions:true});
-  return {ok:true,platform:"instagram",id:published.id||creationId};
+  return (PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com")+
+    "/"+version;
+}
+
+function instagramToken_(){
+  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
+  if(!token)throw new Error("INSTAGRAM_ACCESS_TOKEN_NOT_CONFIGURED");
+  return token;
+}
+
+function instagramUserId_(){
+  const id=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
+  if(!id)throw new Error("IG_USER_ID_NOT_CONFIGURED");
+  return id;
+}
+
+function instagramPost_(path,params){
+  return urlFetchJson_(instagramGraphBase_()+path,{
+    method:"post",
+    payload:params||{},
+    headers:{Authorization:"Bearer "+instagramToken_()},
+    muteHttpExceptions:true
+  });
+}
+
+function instagramGet_(path,params){
+  const qs=Object.keys(params||{}).map(function(k){
+    return encodeURIComponent(k)+"="+encodeURIComponent(String(params[k]));
+  }).join("&");
+  return urlFetchJson_(instagramGraphBase_()+path+(qs?"?"+qs:""),{
+    method:"get",
+    headers:{Authorization:"Bearer "+instagramToken_()},
+    muteHttpExceptions:true
+  });
+}
+
+function waitInstagramContainers_(ids){
+  const pending=(ids||[]).map(String);
+  if(!pending.length)return;
+  for(let attempt=0;attempt<20;attempt++){
+    let allReady=true;
+    for(let i=0;i<pending.length;i++){
+      const status=instagramGet_("/"+encodeURIComponent(pending[i]),{fields:"status_code,status"});
+      const code=String(status.status_code||"").toUpperCase();
+      if(code==="FINISHED")continue;
+      if(code==="ERROR" || code==="EXPIRED")throw new Error("Instagram container "+pending[i]+" status="+JSON.stringify(status));
+      allReady=false;
+    }
+    if(allReady)return;
+    Utilities.sleep(3000);
+  }
+  throw new Error("Instagram media containers did not finish processing in time.");
+}
+
+function publishInstagramCarousel_(imageUrls,caption){
+  const urls=(imageUrls||[]).map(String).filter(Boolean).slice(0,10);
+  if(urls.length<2)throw new Error("Instagram carousel requires at least 2 image URLs.");
+  if(urls.length>10)throw new Error("Instagram carousel supports at most 10 items.");
+  const childIds=[];
+  urls.forEach(function(url){
+    const child=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media",{
+      image_url:url,
+      is_carousel_item:"true"
+    });
+    if(!child.id)throw new Error("Instagram child container missing id: "+JSON.stringify(child));
+    childIds.push(String(child.id));
+  });
+  waitInstagramContainers_(childIds);
+  const parent=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media",{
+    media_type:"CAROUSEL",
+    children:childIds.join(","),
+    caption:String(caption||"").slice(0,2200)
+  });
+  if(!parent.id)throw new Error("Instagram carousel container missing id: "+JSON.stringify(parent));
+  waitInstagramContainers_([String(parent.id)]);
+  const published=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media_publish",{
+    creation_id:String(parent.id)
+  });
+  if(!published.id)throw new Error("Instagram carousel publish failed: "+JSON.stringify(published));
+  return {ok:true,platform:"instagram",media_id:String(published.id),container_id:String(parent.id),children:childIds};
+}
+
+function publishInstagramPhoto_(imageUrl,caption){
+  const url=String(imageUrl||"").trim();
+  if(!url)throw new Error("Missing image_url");
+  const container=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media",{
+    image_url:url,
+    caption:String(caption||"").slice(0,2200)
+  });
+  if(!container.id)throw new Error("Instagram container not created: "+JSON.stringify(container));
+  waitInstagramContainers_([String(container.id)]);
+  const published=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media_publish",{
+    creation_id:String(container.id)
+  });
+  if(!published.id)throw new Error("Instagram publish failed: "+JSON.stringify(published));
+  return {ok:true,platform:"instagram",media_id:String(published.id),container_id:String(container.id)};
+}
+
+function tiktokBaseUrl_(){
+  return "https://open.tiktokapis.com/v2";
+}
+
+function tiktokPublishRequest_(path,payload){
+  const token=tiktokToken_();
+  return urlFetchJson_(tiktokBaseUrl_()+path,{
+    method:"post",
+    contentType:"application/json; charset=UTF-8",
+    headers:{Authorization:"Bearer "+token},
+    payload:JSON.stringify(payload),
+    muteHttpExceptions:true
+  });
+}
+
+function publishTikTokPhoto_(imageUrls,caption,title){
+  const urls=(imageUrls||[]).map(String).filter(Boolean).slice(0,35);
+  if(!urls.length)throw new Error("Missing TikTok photo URLs.");
+  let creator=tiktokPublishRequest_("/post/publish/creator_info/query/",{});
+  const options=((creator.data&&creator.data.privacy_level_options)||[]);
+  const privacy=options.indexOf("PUBLIC_TO_EVERYONE")>=0
+    ? "PUBLIC_TO_EVERYONE" : (options[0]||"SELF_ONLY");
+  const payload={
+    post_info:{
+      title:String(title||"Sonjaya").slice(0,150),
+      description:String(caption||"").slice(0,2200),
+      privacy_level:privacy,
+      disable_comment:false,
+      auto_add_music:false,
+      brand_organic_toggle:true
+    },
+    source_info:{
+      source:"PULL_FROM_URL",
+      photo_images:urls,
+      photo_cover_index:0
+    },
+    post_mode:"DIRECT_POST",
+    media_type:"PHOTO"
+  };
+  const result=tiktokPublishRequest_("/post/publish/content/init/",payload);
+  if(result.error && result.error.code && result.error.code!=="ok"){
+    throw new Error("TikTok publish failed: "+JSON.stringify(result.error));
+  }
+  const publishId=String(result.data&&result.data.publish_id||"");
+  if(!publishId)throw new Error("TikTok publish_id missing: "+JSON.stringify(result));
+  return {ok:true,platform:"tiktok",publish_id:publishId};
+}
+
+function contentPlanFindRow_(date,platform){
+  const sh=contentPlanningSheet_(),last=sh.getLastRow();
+  if(last<2)return -1;
+  const vals=sh.getRange(2,1,last-1,CONTENT_PLAN_HEADERS.length).getValues();
+  const dateKey=String(date||"");
+  const platformKey=String(platform||"").toLowerCase();
+  for(let i=0;i<vals.length;i++){
+    const rowDate=String(vals[i][0]||"").slice(0,10);
+    const rowPlatform=String(vals[i][1]||"").toLowerCase();
+    if(rowDate===dateKey && rowPlatform.indexOf(platformKey)>=0)return i+2;
+  }
+  return -1;
+}
+
+function markContentPlanningPublished_(date,platform,result){
+  const row=contentPlanFindRow_(date,platform);
+  if(row<2)return;
+  const sh=contentPlanningSheet_();
+  sh.getRange(row,CONTENT_PLAN_HEADERS.indexOf("Status")+1).setValue(result.ok?"PUBLISHED":"PUBLISH_ERROR");
+  sh.getRange(row,CONTENT_PLAN_HEADERS.indexOf("Catatan")+1).setValue(JSON.stringify(result).slice(0,1500));
+}
+
+function publishSocial_(body){
+  const platform=String(body.platform||"").toLowerCase().trim();
+  const dateKey=String(body.date||"").slice(0,10);
+  const caption=String(body.caption||"").trim();
+  const title=String(body.title||"Sonjaya").trim();
+  const urls=Array.isArray(body.image_urls)?body.image_urls.map(String).filter(Boolean):[];
+  if(!platform)return json_({ok:false,error:"Unsupported platform"});
+  if(!dateKey)throw new Error("Missing date");
+  if(!urls.length)throw new Error("Missing image_urls");
+  const lock=LockService.getScriptLock();
+  lock.waitLock(20000);
+  try{
+    const key="AUTO_PUBLISH:"+platform+":"+dateKey;
+    const props=PropertiesService.getScriptProperties();
+    const prior=props.getProperty(key);
+    if(prior){
+      return json_({ok:true,platform:platform,date:dateKey,duplicate:true,result:JSON.parse(prior)});
+    }
+    let result;
+    if(platform==="instagram"){
+      result=urls.length>=2?publishInstagramCarousel_(urls,caption):publishInstagramPhoto_(urls[0],caption);
+    }else if(platform==="tiktok"){
+      result=publishTikTokPhoto_(urls,caption,title);
+    }else{
+      return json_({ok:false,error:"Unsupported platform"});
+    }
+    props.setProperty(key,JSON.stringify(result));
+    markContentPlanningPublished_(dateKey,platform,result);
+    return json_({ok:true,platform:platform,date:dateKey,result:result});
+  }catch(err){
+    markContentPlanningPublished_(dateKey,platform,{ok:false,error:String(err)});
+    throw err;
+  }finally{
+    try{lock.releaseLock();}catch(e){}
+  }
+}
+
+function markContentPublished_(date,platform,result){
+  const sh=contentSheet_(),last=sh.getLastRow();
+  if(last<2)return;
+  const vals=sh.getRange(2,1,last-1,11).getValues();
+  for(let i=0;i<vals.length;i++){
+    if(String(vals[i][0])===String(date)&&String(vals[i][1]).toLowerCase()===String(platform).toLowerCase()){
+      sh.getRange(i+2,10).setValue(result.ok?"PUBLISHED":"PUBLISH_ERROR");
+      sh.getRange(i+2,11).setValue(JSON.stringify(result));
+    }
+  }
 }
 
 function refreshTikTok_(){
@@ -1117,6 +1359,10 @@ function setup(){
   if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
   if(!props.getProperty("IG_API_VERSION"))props.setProperty("IG_API_VERSION","v26.0");
   if(!props.getProperty("IG_MESSAGING_HOST"))props.setProperty("IG_MESSAGING_HOST","https://graph.instagram.com");
+  if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("IG_PUBLIC_COMMENT_REPLY"))props.setProperty("IG_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
+  if(!props.getProperty("TIKTOK_COMMENT_KEYWORD"))props.setProperty("TIKTOK_COMMENT_KEYWORD","REY MAU");
+  if(!props.getProperty("TIKTOK_PUBLIC_COMMENT_REPLY"))props.setProperty("TIKTOK_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
   const triggers=ScriptApp.getProjectTriggers();
   if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
     ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
