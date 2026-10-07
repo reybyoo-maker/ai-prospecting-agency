@@ -3,7 +3,6 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
-from email_sender import send_pending
 from gemini_scorer import score_batch
 from prospector import collect_prospects
 
@@ -83,10 +82,6 @@ def main():
     print(f"Prospek ber-email: {len(prospects)}")
     if not prospects:
         print("Tidak ada prospect baru dengan email publik.")
-        try:
-            send_pending()
-        except Exception as exc:
-            print("Email sender:", exc)
         return
 
     rows = []
@@ -159,11 +154,7 @@ def main():
     result = send_to_sheet(rows)
     print("Sheets:", result)
 
-    try:
-        sent_result = send_pending()
-        print("Email sender:", sent_result)
-    except Exception as exc:
-        print("Email sender gagal:", exc)
+    print("Email pertama tetap MANUAL sesuai safety policy; prospect hanya masuk ke queue.")
 
 if __name__ == "__main__":
     main()
