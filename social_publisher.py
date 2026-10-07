@@ -23,6 +23,39 @@ def today_wib() -> str:
     return datetime.now(WIB).date().isoformat()
 
 
+def target_date() -> str:
+    requested = str(os.getenv("APPROVED_DATE", "") or os.getenv("PUBLISH_DATE", "")).strip()
+    if not requested:
+        return today_wib()
+    try:
+        datetime.strptime(requested, "%Y-%m-%d")
+    except ValueError as exc:
+        raise SystemExit("APPROVED_DATE/PUBLISH_DATE must use YYYY-MM-DD") from exc
+    return requested
+
+
+def wait_for_assets(urls: list[str], attempts: int = 6) -> None:
+    clean = [str(u).strip() for u in urls if str(u).strip()]
+    if not clean:
+        raise SystemExit("No publish assets found.")
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        missing = []
+        for url in clean:
+            try:
+                response = requests.get(url, timeout=20, allow_redirects=True)
+                if response.status_code >= 400:
+                    missing.append(f"{response.status_code}:{url}")
+            except Exception as exc:
+                last_error = str(exc)
+                missing.append(f"ERROR:{url}")
+        if not missing:
+            return
+        if attempt < attempts:
+            time.sleep(min(5 * attempt, 15))
+    raise SystemExit("Publish assets not reachable after retries. " + (last_error or missing[-1]))
+
+
 def post_to_platform(item: dict, platform: str) -> dict:
     payload = {
         "token": WEBHOOK_TOKEN,
@@ -55,16 +88,18 @@ def main() -> int:
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     posts = manifest.get("posts") or []
-    today = today_wib()
-    item = next((p for p in posts if str(p.get("date", "")) == today), None)
+    publish_date = target_date()
+    item = next((p for p in posts if str(p.get("date", "")) == publish_date), None)
 
     if not item:
-        print(f"No content scheduled for {today}; nothing to publish.")
+        print(f"No content scheduled for {publish_date}; nothing to publish.")
         return 0
 
     urls = [str(u).strip() for u in item.get("image_urls", []) if str(u).strip()]
     if len(urls) < 2:
         raise SystemExit("Today's publish item has fewer than 2 carousel images.")
+
+    wait_for_assets(urls)
 
     results = {}
     hard_failures = []
@@ -94,7 +129,7 @@ def main() -> int:
 
     Path("publish_results.json").write_text(
         json.dumps(
-            {"date": today, "results": results},
+            {"date": publish_date, "results": results},
             ensure_ascii=False,
             indent=2,
         ),
