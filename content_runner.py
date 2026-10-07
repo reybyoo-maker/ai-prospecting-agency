@@ -404,6 +404,8 @@ def build_carousel(post: dict) -> dict:
         )
         slide_path = folder / f"{idx:02d}.png"
         image.save(slide_path, format="PNG", optimize=True)
+        publish_path = folder / f"{idx:02d}.jpg"
+        image.convert("RGB").save(publish_path, format="JPEG", quality=92, optimize=True, progressive=True)
         slides.append(slide_path)
 
     pdf_path = CAROUSEL_DIR / f"{day}-{slug}.pdf"
@@ -421,11 +423,16 @@ def build_carousel(post: dict) -> dict:
     cover_rel = f"{encoded_dir}/01.png"
     post["carousel_pdf_url"] = f"https://github.com/{REPO}/blob/{BRANCH}/{encoded_pdf}"
     post["carousel_cover_url"] = f"https://github.com/{REPO}/blob/{BRANCH}/{cover_rel}"
+    post["publish_image_urls"] = [
+        f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{encoded_dir}/{i+1:02d}.jpg"
+        for i, _ in enumerate(post["slides"])
+    ]
     post["slides_json"] = json.dumps(
         [
             {
                 "slide": i + 1,
                 "url": f"https://github.com/{REPO}/blob/{BRANCH}/{encoded_dir}/{i+1:02d}.png",
+                "publish_url": f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/{encoded_dir}/{i+1:02d}.jpg",
                 "title": str(s.get("title") or ""),
             }
             for i, s in enumerate(post["slides"])
@@ -451,9 +458,9 @@ def push_plans(posts: list[dict]) -> dict:
             "carousel_pdf_url": p.get("carousel_pdf_url", ""),
             "carousel_cover_url": p.get("carousel_cover_url", ""),
             "slides_json": p.get("slides_json", ""),
-            "status": "PLANNED",
-            "publish_mode": "PLANNING_ONLY",
-            "catatan": "Planning + carousel dibuat otomatis. Tidak diupload otomatis.",
+            "status": "SCHEDULED",
+            "publish_mode": "AUTO_PUBLISH_DAILY",
+            "catatan": "7-slide carousel dibuat otomatis; post hari ini akan dipublish otomatis ke channel yang sudah terhubung setelah asset tersedia.",
         })
     response = requests.post(
         SHEET_WEBHOOK_URL,
@@ -467,10 +474,32 @@ def push_plans(posts: list[dict]) -> dict:
     return data
 
 
+def write_publish_manifest(posts: list[dict]) -> None:
+    manifest = {
+        "generated_at": datetime.now(WIB).isoformat(),
+        "posts": [
+            {
+                "date": p["date"],
+                "platforms": ["instagram", "tiktok"],
+                "title": p["topic"],
+                "caption": p["caption"],
+                "image_urls": p.get("publish_image_urls", []),
+                "topic": p["topic"],
+            }
+            for p in posts
+        ],
+    }
+    Path("publish_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 if __name__ == "__main__":
     plans = generate_plan()
     for post in plans:
         build_carousel(post)
+    write_publish_manifest(plans)
     print("CONTENT_PLANS", len(plans))
     print("SHEET", json.dumps(push_plans(plans), ensure_ascii=False))
     print("CAROUSELS", sum(1 for p in plans if p.get("carousel_pdf_url")))
