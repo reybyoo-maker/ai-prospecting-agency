@@ -1,108 +1,191 @@
 # Sonjaya AI Remote Agency
 
-Sistem saat ini dipisah menjadi tiga jalur agar aman:
-1. Prospecting AI mencari bisnis + email publik dan mengisi Google Sheets.
-2. Email pertama **tidak pernah dikirim otomatis**. Pengiriman dilakukan manual dari kolom **Manual Send** atau menu **Sonjaya -> Kirim Lead Terpilih**. Setelah email pertama terkirim, follow-up dan deteksi reply tetap otomatis.
-3. Content engine hanya membuat **content planning + carousel 7 slide**. Tidak ada upload otomatis. File carousel disimpan di repository dan link PDF/cover masuk ke sheet **Content Planning**.
+Production system sekarang hanya memiliki **2 flow aktif**.
 
-## Sales engine
-
-Discovery berjalan terjadwal melalui GitHub Actions. Kandidat tanpa email publik dibuang.
-
-Gemini membaca evidence publik sebelum memilih satu layanan:
-- Virtual Assistant / Admin Remote
-- Customer Support / WhatsApp Support
-- Lead Generation / Prospecting
-- Social Media Management
-- Content / Design / Video
-- Copywriting
-- Research / Data Support
-- E-commerce Operations
-- Appointment Setting
-- Documents / Presentation / Reporting
-
-Field inti prospect diberi fallback yang tidak mengarang fakta ketika AI mengembalikan nilai kosong. Data lama di sheet tidak dihapus atau dipindahkan.
-
-## Manual email sending
-
-Status awal tetap READY atau REVIEW.
-
-Kolom baru:
-- Manual Send = checkbox. Centang baris untuk mengirim.
-- Send Result = hasil pengiriman.
-
-Menu spreadsheet:
-- Sonjaya -> Kirim Lead Terpilih
-- Sonjaya -> Pasang Kontrol Manual Send
-
-Email pertama tidak lagi dikirim oleh GitHub workflow. Endpoint lama send_queue tetap ada tetapi menjadi no-op sebagai safety guard.
-
-Setelah manual send berhasil:
-SENT -> FOLLOWUP_1 -> FOLLOWUP_2 -> FOLLOWUP_DONE
-
-Jika ada reply, follow-up berhenti. UNSUBSCRIBE menghentikan komunikasi.
-
-## Social automation
-
-Apps Script menerima webhook Instagram dan menangani dua jalur:
-1. Komentar dengan keyword pada `IG_COMMENT_KEYWORD` -> private reply ke commenter -> public comment reply -> pencatatan di **Social Leads**.
-2. Inbound Instagram DM -> auto-reply text -> pencatatan di **Social Leads**.
-
-Script Properties untuk Instagram:
-- `META_VERIFY_TOKEN`
-- `WEBHOOK_TOKEN`
-- `IG_USER_ID`
-- `IG_ACCESS_TOKEN`
-- `IG_API_VERSION` (default `v26.0`)
-- `IG_MESSAGING_HOST` (default `https://graph.instagram.com`)
-- `IG_COMMENT_KEYWORD` (default `REY MAU`)
-- `IG_PUBLIC_COMMENT_REPLY`
-- `WA_NUMBER`
-
-Aksi webhook `social_health` melakukan pemeriksaan non-publish ke Instagram `/me` dan TikTok creator info, tanpa mengirim pesan atau posting.
-
-### TikTok
-
-TikTok photo Direct Post didukung oleh Content Posting API. Foto dapat dikirim dari URL publik yang sudah diverifikasi oleh aplikasi, dan Direct Post memakai scope `video.publish`. Konten dari client yang belum diaudit dibatasi ke private viewing sampai proses audit selesai.
-
-Comment -> DM TikTok tidak diaktifkan menggunakan scraping atau endpoint tidak resmi.
-
-## Content publishing
-
-Workflow harian menghasilkan 7-day plan + carousel 7 slide, menyimpan asset ke GitHub, lalu otomatis mem-publish **Instagram** untuk konten hari berjalan.
+## FLOW 1 — SALES TEAM
 
 Alur:
-`Gemini -> 7-day content plan -> 7 carousel x 7 slide -> commit assets -> Google Sheets -> Instagram publish`
 
-TikTok memiliki workflow `TikTok Publish (Manual Approval)` terpisah. Parameter tanggal approval sekarang dihormati oleh publisher, sehingga workflow dapat memilih tanggal yang diberikan.
+`Discovery web publik -> validasi email publik -> Gemini research/scoring -> Google Sheets -> kirim otomatis -> follow-up otomatis -> deteksi reply -> balasan contextual AI -> WhatsApp handoff`
 
-Publisher melakukan retry dan mengecek seluruh asset URL terlebih dahulu sebelum meminta platform memproses konten.
+### Discovery
+- GitHub Actions berjalan terjadwal setiap 2 jam.
+- Mesin mencari bisnis Indonesia dari web publik.
+- Kandidat tanpa email publik dibuang.
+- Email dideduplicasi.
+- Evidence publik disimpan.
+- Gemini memilih kebutuhan/service berdasarkan evidence.
+- Lead dengan skor >= 75 masuk status `READY`; sisanya `REVIEW`.
 
-## Google Sheets setup
+### Automatic email
+Email pertama sekarang **tidak lagi manual**.
 
-1. Tempel `apps-script/Code.gs` ke Apps Script yang terikat ke spreadsheet.
-2. Jalankan `setup()` satu kali dan izinkan akses.
-3. Pastikan Script Properties utama sudah ada.
-4. Deploy Apps Script sebagai Web App dan buat deployment baru setelah mengganti `Code.gs`.
-5. Jalankan endpoint healthcheck melalui workflow GitHub untuk memverifikasi webhook, Apps Script version, Instagram, TikTok (jika dikonfigurasi), dan Gemini.
+Apps Script membuat satu sales cycle terjadwal setiap 2 jam:
+1. scan reply terbaru,
+2. proses follow-up yang sudah jatuh tempo,
+3. kirim sampai **30 initial email READY** dengan prioritas skor tertinggi.
 
-Sheet yang dibuat/dikelola oleh Apps Script:
+Setelah initial email berhasil:
+`SENT -> FOLLOWUP_1 (+2 hari) -> FOLLOWUP_2 (+5 hari) -> FOLLOWUP_3 (+9 hari) -> FOLLOWUP_DONE`
+
+Jika prospek membalas, follow-up berhenti. Jika mereka mengirim `UNSUBSCRIBE`, status berubah menjadi `OPTOUT` dan komunikasi berikutnya dihentikan.
+
+Semua pengiriman menggunakan lock, retry/error state, Lead ID, dan subject tag `[SJ-xxxxxxxxxxxx]` agar thread dapat dilacak.
+
+### Important email limit
+Target operasional adalah 30 initial email setiap 2 jam. Actual send tetap dibatasi kuota akun Google. Apps Script menyediakan `MailApp.getRemainingDailyQuota()`, dan quota resmi saat ini adalah 100 recipient/hari untuk akun konsumen dan 1.500 recipient/hari untuk Google Workspace; batas tersebut dapat berubah. citeturn953425search0turn953425search2
+
+Artinya:
+- akun konsumen tidak mungkin mengirim 30 x 12 = 360 recipient/hari;
+- Google Workspace dapat mendukung target 360/hari selama quota dan kebijakan akun mencukupi;
+- sistem selalu menghormati quota yang tersisa, bukan memaksa melewatinya.
+
+## FLOW 2 — CONTENT STUDIO
+
+Tidak ada lagi auto-upload.
+
+Alur:
+
+`Content strategy -> Gemini script -> quality gate -> 7-slide feed carousel -> JPG/PNG/PDF -> Google Sheets -> manual upload oleh tim`
+
+### Content standard
+Setiap batch membuat 7 hari konten.
+
+Struktur setiap carousel:
+1. Hook
+2. Problem
+3. Insight
+4. Framework
+5. Example
+6. Mistake / objection
+7. CTA
+
+Setiap hari menggunakan pilar berbeda dan design family berbeda.
+
+Design family:
+- BOLD_EDITORIAL
+- SPLIT_SCREEN
+- DASHBOARD
+- FLOW_DIAGRAM
+- CARD_STACK
+- TYPE_POSTER
+- MINIMAL_TECH
+
+Standar copy:
+- Bahasa Indonesia natural.
+- 1 gagasan utama per slide.
+- Headline kuat dan ringkas.
+- Contoh operasional realistis.
+- Tidak mengarang testimonial, omzet, statistic, client, pricing, atau performance.
+- Soft selling maksimum satu slide.
+- CTA bervariasi.
+- Tidak menggunakan slogan AI generik atau clickbait murahan.
+
+### Output Content Planning
+Google Sheets `Content Planning` menyimpan:
+- tanggal
+- platform
+- format
+- tujuan
+- topik
+- hook
+- caption
+- CTA
+- jumlah slide
+- PDF carousel
+- cover
+- Slides JSON
+- status
+- publish mode
+- pilar konten
+- script lengkap per slide
+- URL Slide 1 sampai Slide 7
+
+Status production:
+`READY_FOR_MANUAL_UPLOAD`
+
+Tidak ada proses upload otomatis ke Instagram atau TikTok.
+
+## Google Sheets
+
+Apps Script mengelola:
 - `Prospects`
 - `Content`
 - `Content Planning`
-- `Social Leads`
 
-## Automation safety
+Kolom utama Prospects:
+- Lead ID
+- Tanggal ditemukan
+- Nama bisnis
+- Email
+- Sumber email
+- Website
+- Social
+- Kota
+- Kategori
+- Bukti publik
+- Skor
+- Prioritas
+- Kebutuhan terdeteksi
+- Layanan direkomendasikan
+- Pain point
+- Hook personal
+- Subject
+- Body
+- Status
+- Sent At
+- Follow-up 1 At
+- Follow-up 2 At
+- Follow-up 3 At
+- Reply At
+- Reply Intent
+- Last Reply
+- WhatsApp Handoff
+- Attempts
+- Last Error
+- Opt Out
 
-- Initial email: manual.
-- Follow-up: otomatis setelah initial email manual terkirim.
-- Reply detection: otomatis.
-- Instagram keyword DM: otomatis setelah webhook + API permission siap.
-- Content planning: otomatis.
-- Content upload: nonaktif.
+## Automation
 
-## Limits
+Sales discovery tetap menggunakan GitHub Actions terjadwal. Scheduled workflows berjalan dari default branch dan dapat mengalami delay ketika load GitHub tinggi, sehingga sistem tidak menjanjikan ketepatan detik; interval 2 jam tetap menjadi target jadwal. citeturn542564search1turn542564search2
 
-Discovery hanya menemukan data publik yang dapat diindeks/diakses sumber discovery. Tidak ada klaim cakupan 100% internet.
+Apps Script menjadi scheduler untuk pengiriman awal, follow-up, dan reply detection.
 
-GitHub Actions adalah automation terjadwal, bukan proses server yang hidup setiap detik.
+## Social platforms
+
+Instagram dan TikTok **tidak lagi memiliki flow otomatis** di project ini.
+
+Tidak ada:
+- auto-post
+- auto-upload
+- auto-DM
+- auto-comment reply
+- TikTok comment -> DM
+- Instagram comment -> DM
+
+Semua aktivitas social posting dilakukan manual oleh tim Content Studio.
+
+## Retired code
+
+Kode dan workflow social/publishing lama sengaja dipensiunkan agar tidak ada jalur ketiga yang berjalan diam-diam.
+
+Production source utama:
+- `prospecting_engine.py`
+- `content_runner.py`
+- `service_catalog.py`
+- `apps-script/Code.gs`
+- `.github/workflows/daily.yml`
+- `.github/workflows/content-daily.yml`
+- `.github/workflows/healthcheck.yml`
+- `.github/workflows/validate.yml`
+
+Folder/file legacy yang masih tersimpan tetapi tidak aktif boleh diperlakukan sebagai arsip sampai cleanup terakhir dilakukan.
+
+## Security rules
+
+- API keys dan webhook token disimpan di GitHub Secrets / Apps Script Properties.
+- Secret tidak ditulis di source code.
+- Email hanya diproses dari data publik.
+- `UNSUBSCRIBE` menghentikan follow-up.
+- Sending memakai lock dan state machine.
+- Content Studio tidak mempunyai hak untuk auto-publish social.
