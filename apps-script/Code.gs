@@ -799,6 +799,10 @@ function socialHealth_(){
   return json_(out);
 }
 
+function socialHealth(){
+  return socialHealth_();
+}
+
 function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
