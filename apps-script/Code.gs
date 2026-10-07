@@ -11,7 +11,7 @@ const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption",
 const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.8";
+const CODE_VERSION = "2026-10-07.9";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -1099,12 +1099,15 @@ function scanReplies_(limit){
 
     const business=String(sh.getRange(row,col_("Nama bisnis")).getValue()||"Perusahaan");
     const email=String(sh.getRange(row,col_("Email")).getValue()||"");
+    const service=String(sh.getRange(row,col_("Layanan direkomendasikan")).getValue()||"automation AI");
     const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\\b/i.test(body)?"INTERESTED":"REPLIED";
+    const waNumber=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\\D/g,"");
     const wa=waLink_(business,email);
-    const replyText=wa
-      ? "Terima kasih sudah membalas. Agar lebih cepat, kita bisa lanjut ke WhatsApp untuk membahas kebutuhan yang paling sesuai.\\n\\nWhatsApp: "+wa+"\\n\\nSalam,\\nRey\\n"+AGENCY_NAME
-      : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\\n\\nSalam,\\nRey\\n"+AGENCY_NAME;
-    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
+    const waMessage="Halo Rey, saya dari "+business+". Saya membalas email tentang kebutuhan "+service+". Saya ingin membahas detailnya.";
+    const directWa=waNumber?"https://wa.me/"+waNumber+"?text="+encodeURIComponent(waMessage):"";
+    const replyText=waNumber
+      ? "Terima kasih sudah membalas, "+business+".\\n\\nAgar lebih cepat, kita lanjutkan pembahasannya langsung ke WhatsApp Rey.\\n\\nNomor WhatsApp Rey: +"+waNumber+"\\n\\nKlik untuk langsung membuka chat:\\n"+directWa+"\\n\\nPesan sudah saya siapkan agar tinggal kirim:\\n\\""+waMessage+"\\"\\n\\nSalam,\\nRey\\n"+AGENCY_NAME;
+      : "Terima kasih sudah membalas. Saya akan menindaklanjuti kebutuhan Anda melalui email ini.\\n\\nSalam,\\nRey\\n"+AGENCY_NAME;    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
     sh.getRange(row,col_("Status")).setValue(wa?"WA_HANDOFF":"REPLIED");
     sh.getRange(row,col_("Reply At")).setValue(now_());
     sh.getRange(row,col_("Reply Intent")).setValue(intent);
