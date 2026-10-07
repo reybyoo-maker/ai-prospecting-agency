@@ -163,7 +163,9 @@ function sendInstagramDm_(recipientId,text){
   const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
   const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
   const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  const host=PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com";
+  const host=PropertiesService.getScriptProperties().getProperty("IG_GRAPH_HOST") ||
+    PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST") ||
+    "https://graph.instagram.com";
   if(!token||!igUserId)throw new Error("INSTAGRAM_MESSAGING_NOT_CONFIGURED");
   return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(igUserId)+"/messages",{
     method:"post",
@@ -737,6 +739,14 @@ function liveHealth_(){
 
 function socialHealth_(){
   const props=PropertiesService.getScriptProperties();
+  const configuredHost=props.getProperty("IG_GRAPH_HOST") ||
+    props.getProperty("IG_MESSAGING_HOST") || "";
+  const hosts=[
+    configuredHost,
+    "https://graph.instagram.com",
+    "https://graph.facebook.com"
+  ].filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;});
+
   const out={
     ok:true,
     version:CODE_VERSION,
@@ -747,7 +757,7 @@ function socialHealth_(){
     },
     instagram:{
       configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")&&props.getProperty("IG_USER_ID")),
-      host:props.getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com",
+      host:configuredHost||"auto-detect",
       api_version:props.getProperty("IG_API_VERSION")||"v26.0",
       user_id_configured:Boolean(props.getProperty("IG_USER_ID")),
       token_configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
@@ -766,16 +776,36 @@ function socialHealth_(){
   };
 
   if(out.instagram.configured){
-    try{
-      const me=instagramGet_("/me",{fields:"id,username"});
-      out.instagram.api_ok=Boolean(me&&me.id);
-      out.instagram.account=me&&me.id ? {id:String(me.id),username:String(me.username||"")} : null;
-      if(!out.instagram.api_ok)out.instagram.error="Instagram /me returned no id: "+JSON.stringify(me).slice(0,900);
-    }catch(err){
-      out.instagram.error=String(err).slice(0,900);
+    let lastError="";
+    for(let i=0;i<hosts.length;i++){
+      const host=hosts[i];
+      try{
+        const version=out.instagram.api_version;
+        const id=String(props.getProperty("IG_USER_ID")||"");
+        let me;
+        if(id){
+          me=instagramGetHost_(host,"/"+encodeURIComponent(id),{fields:"id,username,name"});
+        }else if(host==="https://graph.instagram.com"){
+          me=instagramGetHost_(host,"/me",{fields:"id,username"});
+        }
+        if(me&&me.id){
+          out.instagram.api_ok=true;
+          out.instagram.host=host;
+          out.instagram.account={id:String(me.id),username:String(me.username||me.name||"")};
+          props.setProperty("IG_GRAPH_HOST",host);
+          props.setProperty("IG_MESSAGING_HOST",host);
+          break;
+        }
+        lastError=JSON.stringify(me||{}).slice(0,900);
+      }catch(err){
+        lastError=String(err).slice(0,900);
+      }
+    }
+    if(!out.instagram.api_ok){
+      out.instagram.error="Instagram API probe gagal pada semua host. "+lastError;
     }
   }else{
-    out.instagram.error="IG_ACCESS_TOKEN and IG_USER_ID belum lengkap.";
+    out.instagram.error="IG_ACCESS_TOKEN dan IG_USER_ID belum lengkap.";
   }
 
   if(out.tiktok.configured){
@@ -800,6 +830,18 @@ function socialHealth_(){
 
   out.ok=Boolean(out.webhook.meta_verify_token && out.instagram.configured && out.instagram.api_ok);
   return json_(out);
+}
+
+function instagramGetHost_(host,path,params){
+  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
+  const qs=Object.keys(params||{}).map(function(k){
+    return encodeURIComponent(k)+"="+encodeURIComponent(String(params[k]));
+  }).join("&");
+  return urlFetchJson_(host+"/"+version+path+(qs?"?"+qs:""),{
+    method:"get",
+    headers:{Authorization:"Bearer "+instagramToken_()},
+    muteHttpExceptions:true
+  });
 }
 
 function socialHealth(){
@@ -1092,8 +1134,10 @@ function urlFetchJson_(url,options){
 
 function instagramGraphBase_(){
   const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  return (PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com")+
-    "/"+version;
+  const host=PropertiesService.getScriptProperties().getProperty("IG_GRAPH_HOST") ||
+    PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST") ||
+    "https://graph.instagram.com";
+  return host+"/"+version;
 }
 
 function instagramToken_(){
