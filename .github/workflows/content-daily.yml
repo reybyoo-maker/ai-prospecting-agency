@@ -27,7 +27,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: "main"
         run: python content_runner.py
-      - name: Save carousel assets and publish manifest
+      - name: Save content assets and manual-upload manifest
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
