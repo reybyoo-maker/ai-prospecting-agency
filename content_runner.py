@@ -338,6 +338,10 @@ def render_slide(slide: dict, index: int, total: int, topic: str, cover: bool = 
     draw.rounded_rectangle((36,36,W-36,H-36),radius=42,outline=LIGHT_BLUE,width=3)
     add_header(draw,index,total)
 
+    role = str(slide.get("role") or "INSIGHT").upper().strip()
+    draw.rounded_rectangle((740,118,1006,158),radius=18,fill=WHITE,outline=LIGHT_BLUE,width=2)
+    draw.text((764,128),role,font=font(18,True),fill=BLUE)
+
     if cover:
         if style=="SPLIT_SCREEN":
             draw.rounded_rectangle((58,158,630,1190),radius=38,fill=WHITE)
