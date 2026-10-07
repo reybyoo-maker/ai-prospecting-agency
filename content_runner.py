@@ -25,6 +25,16 @@ CAROUSEL_DIR = Path("carousels")
 SLIDE_COUNT = 7
 PLAN_DAYS = 7
 
+CONTENT_PILLARS = [
+    "Lead Generation & Prospecting",
+    "Sales Follow-up & Conversion",
+    "Customer Support & WhatsApp",
+    "Social Media & Content Operations",
+    "Admin & Back-office Automation",
+    "Research, Data & Reporting",
+    "Appointment Setting & Retention",
+]
+
 BLUE = "#0B5FFF"
 NAVY = "#073B8C"
 BLUE_2 = "#2F80ED"
@@ -90,6 +100,7 @@ def generate_plan() -> list[dict]:
                     "type": "object",
                     "properties": {
                         "date": {"type": "string"},
+                        "pillar": {"type": "string"},
                         "objective": {"type": "string"},
                         "topic": {"type": "string"},
                         "hook": {"type": "string"},
@@ -100,60 +111,71 @@ def generate_plan() -> list[dict]:
                             "items": {
                                 "type": "object",
                                 "properties": {
+                                    "role": {"type": "string"},
                                     "title": {"type": "string"},
                                     "body": {"type": "string"},
                                     "visual_direction": {"type": "string"},
                         "design_notes": {"type": "string"}
                                 },
-                                "required": ["title", "body", "visual_direction", "design_notes"]
+                                "required": ["role", "title", "body", "visual_direction", "design_notes"]
                             },
                             "minItems": SLIDE_COUNT,
                             "maxItems": SLIDE_COUNT
                         }
                     },
-                    "required": ["date", "objective", "topic", "hook", "caption", "cta", "slides"]
+                    "required": ["date", "pillar", "objective", "topic", "hook", "caption", "cta", "slides"]
                 }
             }
         },
         "required": ["posts"]
     }
     prompt = f"""
-Kamu adalah AI content strategist + carousel art director khusus konten bisnis Indonesia.
-Layanan Sonjaya:
-{catalog_text()}
+Kamu adalah CONTENT DIRECTOR senior untuk Sonjaya Remote Business Services.
+Target utama: owner/manager UMKM Indonesia yang punya masalah operasional, penjualan, follow-up,
+customer support, konten, admin, data, atau appointment.
+Buat CONTENT PLANNING 7 hari mulai {start} untuk feed Sonjaya.
+Setiap hari = tepat 1 carousel feed 1080x1350, tepat 7 slide.
+Pilar wajib per hari:
+Hari 1: Lead Generation & Prospecting
+Hari 2: Sales Follow-up & Conversion
+Hari 3: Customer Support & WhatsApp
+Hari 4: Social Media & Content Operations
+Hari 5: Admin & Back-office Automation
+Hari 6: Research, Data & Reporting
+Hari 7: Appointment Setting & Retention
 
-Buat CONTENT PLANNING {PLAN_DAYS} hari mulai {start}.
-Setiap hari = tepat 1 carousel Instagram yang juga bisa dipakai sebagai TikTok photo post.
-Setiap carousel = tepat {SLIDE_COUNT} slide.
-
-ANGLE WAJIB PER HARI:
-Hari 1: framework 3-5 langkah yang bisa langsung diterapkan
-Hari 2: myth vs reality yang membongkar miskonsepsi
-Hari 3: audit checklist untuk menemukan bottleneck
-Hari 4: decision guide yang membantu memilih cara A atau B
-Hari 5: workflow end-to-end yang realistis
-Hari 6: mistake breakdown + perbaikan praktis
-Hari 7: quick wins yang bisa dikerjakan dalam 30 menit
+STRUKTUR CERITA WAJIB:
+Slide 1 = HOOK. Berhenti-scroll: satu kalimat tajam dan spesifik.
+Slide 2 = PROBLEM. Situasi nyata + konsekuensi tanpa mengarang angka.
+Slide 3 = INSIGHT. Satu pemikiran yang mengubah sudut pandang.
+Slide 4 = FRAMEWORK. Langkah/kerangka yang bisa langsung dipakai.
+Slide 5 = EXAMPLE. Contoh operasional realistis untuk bisnis Indonesia.
+Slide 6 = MISTAKE. Kesalahan/keberatan umum + perbaikannya.
+Slide 7 = CTA. Ajakan ringan untuk save/share/DM/WhatsApp.
 
 BRAND:
-- palet utama hanya biru, biru muda, putih, dan navy
-- setiap carousel wajib punya elemen robot/maskot AI
-- setiap hari wajib memakai design family berbeda: BOLD_EDITORIAL, SPLIT_SCREEN, DASHBOARD, FLOW_DIAGRAM, CARD_STACK, TYPE_POSTER, MINIMAL_TECH
-- satu brand, tujuh rasa visual; jangan mengulang komposisi cover atau posisi robot antar hari
-- gunakan typography hierarchy, grid modern, rounded cards, subtle depth, diagram, numbered markers, dan white space
-- visual_direction harus konkret dan bisa digambar dengan shape/ikon/diagram/robot
-- design_notes wajib menjelaskan komposisi spesifik untuk hari tersebut
+- Palet hanya biru, biru muda, putih, navy.
+- Kesan premium, modern, smart, human; bukan template AI generik.
+- 7 hari wajib 7 design family berbeda: BOLD_EDITORIAL, SPLIT_SCREEN, DASHBOARD, FLOW_DIAGRAM, CARD_STACK, TYPE_POSTER, MINIMAL_TECH.
+- Gunakan robot/maskot Sonjaya 1-2 kali per carousel dengan posisi berbeda.
+- Gunakan hierarchy typography yang kuat, grid rapi, rounded cards, numbered markers, diagram, dan white space.
+- Setiap slide wajib punya visual device yang benar-benar berguna: flow, checklist, comparison, matrix, timeline, dashboard, chat, cards, atau diagram.
+- visual_direction harus menjelaskan apa yang digambar.
+- design_notes harus menjelaskan komposisi/focal point.
 
-COPY:
-- bahasa Indonesia natural, tajam, dan praktis
-- satu ide utama per slide
-- body sekitar 20-45 kata
-- hook spesifik dan membuat orang ingin swipe
-- contoh operasional realistis untuk UMKM/bisnis Indonesia
-- jangan mengarang testimoni, omzet, data, hasil, klien, atau angka tanpa sumber
-- soft selling; maksimal satu slide eksplisit menawarkan jasa
-- CTA bervariasi
-- jangan memerintahkan upload atau publish otomatis
+COPY QUALITY BAR:
+- Bahasa Indonesia natural, tajam, praktis, tidak sok AI.
+- Judul slide 4-12 kata ideal.
+- Body 18-45 kata ideal.
+- Satu gagasan utama per slide.
+- Hindari "di era digital", "AI mengubah segalanya", "jangan ketinggalan", "wajib tahu".
+- Jangan bikin clickbait murahan.
+- Jangan mengarang testimoni, omzet, klien, statistik, hasil, harga, atau angka performa.
+- Angka hanya untuk contoh ilustratif dan harus jelas sebagai contoh.
+- Soft selling maksimum 1 slide.
+- CTA bervariasi.
+- Jangan menyebut crawler, scraping, GitHub, atau pipeline internal.
+- Tidak ada auto-upload; semua asset disiapkan untuk upload manual.
 Return JSON only.
 """
     cfg = types.GenerateContentConfig(
@@ -178,14 +200,18 @@ Return JSON only.
         target_iso = target_date.isoformat()
         p = by_date.get(target_iso) or (posts[offset] if offset < len(posts) else {}) or {}
         slides = list(p.get("slides") or [])[:SLIDE_COUNT]
+        fallback_roles = ["HOOK","PROBLEM","INSIGHT","FRAMEWORK","EXAMPLE","MISTAKE","CTA"]
         while len(slides) < SLIDE_COUNT:
             slides.append({
-                "title": "Catatan penting",
-                "body": "Gunakan langkah yang paling relevan dengan kondisi bisnis kamu.",
-                "visual_direction": "Ikon checklist minimalis."
+                "role": fallback_roles[len(slides)],
+                "title": "Langkah yang paling relevan",
+                "body": "Pilih satu tindakan yang bisa langsung dicoba pada proses bisnis yang sedang bermasalah.",
+                "visual_direction": "Kartu checklist dengan satu focal point.",
+                "design_notes": "Gunakan whitespace luas dan satu aksen visual."
             })
         cleaned.append({
             "date": target_iso,
+            "pillar": str(p.get("pillar") or CONTENT_PILLARS[offset % len(CONTENT_PILLARS)]),
             "objective": str(p.get("objective") or "Edukasi"),
             "topic": str(p.get("topic") or ("Tips operasional bisnis hari "+str(offset+1))),
             "hook": str(p.get("hook") or "Bisnis kamu masih melakukan ini manual?"),
@@ -196,6 +222,48 @@ Return JSON only.
             "content_angle": CONTENT_ANGLES[offset % len(CONTENT_ANGLES)],
         })
     return cleaned
+
+    validate_content_plan(cleaned)
+    return cleaned
+
+def validate_content_plan(posts: list[dict]) -> None:
+    errors = []
+    required_roles = ["HOOK","PROBLEM","INSIGHT","FRAMEWORK","EXAMPLE","MISTAKE","CTA"]
+    seen_topics = set()
+    if len(posts) != PLAN_DAYS:
+        errors.append(f"Expected {PLAN_DAYS} posts, got {len(posts)}.")
+    for day, post in enumerate(posts, start=1):
+        topic = str(post.get("topic") or "").strip()
+        if not topic:
+            errors.append(f"Day {day}: missing topic.")
+        elif topic.lower() in seen_topics:
+            errors.append(f"Day {day}: duplicate topic.")
+        seen_topics.add(topic.lower())
+        if not str(post.get("pillar") or "").strip():
+            errors.append(f"Day {day}: missing content pillar.")
+        slides = post.get("slides") or []
+        if len(slides) != SLIDE_COUNT:
+            errors.append(f"Day {day}: expected {SLIDE_COUNT} slides.")
+            continue
+        roles = [str(s.get("role") or "").upper().strip() for s in slides]
+        if roles != required_roles:
+            errors.append(f"Day {day}: invalid slide role sequence {roles}.")
+        for slide_no, slide in enumerate(slides, start=1):
+            title = str(slide.get("title") or "").strip()
+            body = str(slide.get("body") or "").strip()
+            visual = str(slide.get("visual_direction") or "").strip()
+            if not title or not body or not visual:
+                errors.append(f"Day {day} slide {slide_no}: missing content.")
+            if not 3 <= len(title.split()) <= 14:
+                errors.append(f"Day {day} slide {slide_no}: title length out of range.")
+            if not 10 <= len(body.split()) <= 60:
+                errors.append(f"Day {day} slide {slide_no}: body length out of range.")
+        if len(str(post.get("hook") or "").strip()) < 18:
+            errors.append(f"Day {day}: hook too weak.")
+        if len(str(post.get("cta") or "").strip()) < 10:
+            errors.append(f"Day {day}: CTA too weak.")
+    if errors:
+        raise ValueError("CONTENT_QUALITY_GATE_FAILED | " + " | ".join(errors[:20]))
 
 
 def draw_robot(draw: ImageDraw.ImageDraw, x: int, y: int, scale: float = 1.0, pose: int = 0, invert: bool = False):
@@ -447,7 +515,7 @@ def push_plans(posts: list[dict]) -> dict:
     for p in posts:
         rows.append({
             "date": p["date"],
-            "platform": "Instagram / TikTok",
+            "platform": "Instagram",
             "format": "CAROUSEL_7_SLIDES",
             "objective": p["objective"],
             "topic": p["topic"],
@@ -458,9 +526,17 @@ def push_plans(posts: list[dict]) -> dict:
             "carousel_pdf_url": p.get("carousel_pdf_url", ""),
             "carousel_cover_url": p.get("carousel_cover_url", ""),
             "slides_json": p.get("slides_json", ""),
-            "status": "SCHEDULED",
-            "publish_mode": "AUTO_PUBLISH_DAILY",
-            "catatan": "7-slide carousel dibuat otomatis; post hari ini akan dipublish otomatis ke channel yang sudah terhubung setelah asset tersedia.",
+            "status": "READY_FOR_MANUAL_UPLOAD",
+            "publish_mode": "MANUAL_UPLOAD",
+            "content_pillar": p.get("pillar", ""),
+            "script": "\n\n".join(
+                [
+                    f"Slide {i+1} [{s.get('role','')}]\nJudul: {s.get('title','')}\nIsi: {s.get('body','')}\nVisual: {s.get('visual_direction','')}\nCatatan desain: {s.get('design_notes','')}"
+                    for i, s in enumerate(p.get("slides", [])[:SLIDE_COUNT])
+                ]
+            ),
+            "slide_urls": p.get("publish_image_urls", []),
+            "catatan": "Content Studio | asset dan script siap untuk upload manual.",
         })
     response = requests.post(
         SHEET_WEBHOOK_URL,
@@ -480,7 +556,7 @@ def write_publish_manifest(posts: list[dict]) -> None:
         "posts": [
             {
                 "date": p["date"],
-                "platforms": ["instagram", "tiktok"],
+                "manual_upload_platforms": ["instagram", "tiktok"],
                 "title": p["topic"],
                 "caption": p["caption"],
                 "image_urls": p.get("publish_image_urls", []),
