@@ -16,7 +16,6 @@ SHEET_WEBHOOK_URL = os.environ["SHEET_WEBHOOK_URL"]
 WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
 MAX_PER_RUN = int(os.getenv("MAX_PER_RUN", "60"))
 MAX_AI_PER_RUN = int(os.getenv("MAX_AI_PER_RUN", "40"))
-SEND_LIMIT = int(os.getenv("SEND_LIMIT", "20"))
 SEARCH_BACKENDS = os.getenv("SEARCH_BACKENDS", "google,brave,bing,duckduckgo").strip()
 SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", "25"))
 QUERY_PAUSE = float(os.getenv("QUERY_PAUSE", "0.6"))
@@ -404,21 +403,13 @@ def run():
               "subject":f"[SJ-{make_id(lead['recipient_email'])}] {ai['subject']}"[:245],
               "body":ai["body"],
               "status":"READY" if score>=75 else "REVIEW",
-              "catatan":"public business email; source="+lead.get("search_backend","unknown")+"; initial email requires MANUAL SEND"
+              "catatan":"public business email; source="+lead.get("search_backend","unknown")+"; queued for automated sales cycle"
             })
         except Exception as e:
             print("AI_ERROR",i,type(e).__name__,e)
     if rows:
         print("INGEST",sheet_call("ingest",rows=rows))
-    print("SEND", "DISABLED — initial email is manual only in Google Sheets")
-    try:
-        print("REPLIES",sheet_call("scan_replies",limit=20))
-    except Exception as e:
-        print("REPLY_ERROR",e)
-    try:
-        print("FOLLOWUPS",sheet_call("process_followups",limit=5))
-    except Exception as e:
-        print("FOLLOWUP_ERROR",e)
+    print("SALES_QUEUE", "Leads queued in Google Sheets; 2-hour Apps Script cycle handles automated sending, follow-ups, and replies.")
 
 if __name__=="__main__":
     run()
