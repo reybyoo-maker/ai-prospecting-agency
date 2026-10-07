@@ -283,7 +283,7 @@ function doPost(e){
     if(action==="scan_replies")return scanReplies_(Number(body.limit||40));
     if(action==="process_followups")return processFollowups_(Number(body.limit||MAX_FOLLOWUPS_PER_RUN));
     if(action==="sales_cycle")return salesAutomation_();
-    if(action==="setup_automation")return setup();
+    if(action==="setup_automation"){const message=setup();return json_({ok:true,message:message});}
     if(action==="mark_error")return markError_(String(body.id||""),String(body.error||""));
     if(action==="content_ingest")return ingestContent_(body.rows||[]);
     return json_({ok:false,error:"Unknown action"});
@@ -677,23 +677,25 @@ function urlFetchJson_(url,options){
   return data;
 }
 
-function removeAutomationTriggers_(){
+function removeLegacyAutomationTriggers_(){
   ScriptApp.getProjectTriggers().forEach(function(t){
     const fn=t.getHandlerFunction();
-    if(["hourlyAutomation_","manualSendOnEdit_","salesAutomation_"].indexOf(fn)>=0)ScriptApp.deleteTrigger(t);
+    if(["hourlyAutomation_","manualSendOnEdit_"].indexOf(fn)>=0)ScriptApp.deleteTrigger(t);
   });
 }
 
 function setup(){
   sheet_();contentSheet_();contentPlanningSheet_();
-  removeAutomationTriggers_();
-  ScriptApp.newTrigger("salesAutomation_").timeBased().everyHours(2).create();
+  removeLegacyAutomationTriggers_();
+  const hasSalesTrigger=ScriptApp.getProjectTriggers().some(function(t){return t.getHandlerFunction()==="salesAutomation_";});
+  if(!hasSalesTrigger)ScriptApp.newTrigger("salesAutomation_").timeBased().everyHours(2).create();
   backfillProspectControls_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME));
   return "Sonjaya sales automation ready | version "+CODE_VERSION;
 }
 
 function systemStatus(){
-  return liveHealth_();
+  const ui=SpreadsheetApp.getUi();
+  ui.alert(liveHealth_().getContent());
 }
 
 function salesAutomation_(){
