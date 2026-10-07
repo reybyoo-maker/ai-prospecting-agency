@@ -2,7 +2,7 @@ from __future__ import annotations
 import os, sys, requests
 from google import genai
 
-EXPECTED_APPS_SCRIPT_VERSION = os.getenv("EXPECTED_APPS_SCRIPT_VERSION", "2026-10-07.1")
+EXPECTED_APPS_SCRIPT_VERSION = os.getenv("EXPECTED_APPS_SCRIPT_VERSION", "2026-10-08.1")
 
 def need(name):
     value=os.getenv(name,"").strip()
@@ -38,8 +38,8 @@ if ok:
         elif data.get("version") != EXPECTED_APPS_SCRIPT_VERSION:
             print("APPS_SCRIPT_VERSION_MISMATCH",data.get("version"),"expected",EXPECTED_APPS_SCRIPT_VERSION)
             ok=False
-        elif not data.get("triggers",{}).get("manualSendOnEdit"):
-            print("APPS_SCRIPT_MANUAL_TRIGGER_MISSING")
+        elif not data.get("triggers",{}).get("salesAutomation"):
+            print("APPS_SCRIPT_SALES_TRIGGER_MISSING")
             ok=False
     except Exception as e:
         print("APPS_SCRIPT_HEALTH_ERROR",type(e).__name__,e)
