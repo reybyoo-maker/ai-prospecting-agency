@@ -570,7 +570,7 @@ def write_publish_manifest(posts: list[dict]) -> None:
             for p in posts
         ],
     }
-    Path("publish_manifest.json").write_text(
+    Path("content_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
