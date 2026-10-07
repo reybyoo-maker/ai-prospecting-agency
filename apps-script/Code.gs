@@ -3,15 +3,17 @@ const CONTENT_SHEET = "Content";
 const CONTENT_PLAN_SHEET = "Content Planning";
 const MAX_ATTEMPTS = 3;
 const DAILY_SEND_LIMIT = 20;
-const MAX_FOLLOWUPS_PER_RUN = 5;
+const MAX_FOLLOWUPS_PER_RUN = 10;
+const BATCH_SEND_LIMIT = 30;
+const MAX_DAILY_AUTOMATED_SENDS = 360;
 const AGENCY_NAME = "Sonjaya Remote Business Services";
 const MANUAL_SEND_COL = "Manual Send";
 const SEND_RESULT_COL = "Send Result";
 const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
-const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan"];
+const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Hook","Caption","CTA","Slide Count","Carousel PDF URL","Carousel Cover URL","Slides JSON","Status","Publish Mode","Catatan","Pilar Konten","Script Lengkap","Slide 1 URL","Slide 2 URL","Slide 3 URL","Slide 4 URL","Slide 5 URL","Slide 6 URL","Slide 7 URL"];
 const SOCIAL_LEADS_SHEET = "Social Leads";
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-07.11";
+const CODE_VERSION = "2026-10-08.1";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -104,466 +106,6 @@ function configureProspectControls_(sh){
   }
 }
 
-function socialLeadsSheet_(){
-  const ss=SpreadsheetApp.getActiveSpreadsheet();
-  let sh=ss.getSheetByName(SOCIAL_LEADS_SHEET);
-  if(!sh)sh=ss.insertSheet(SOCIAL_LEADS_SHEET);
-  ensureHeaders_(sh,SOCIAL_LEADS_HEADERS);
-  sh.setFrozenRows(1);
-  sh.getRange(1,1,1,SOCIAL_LEADS_HEADERS.length).setFontWeight("bold");
-  sh.getDataRange().setWrap(true);
-  return sh;
-}
-
-function colSocial_(name){return SOCIAL_LEADS_HEADERS.indexOf(name)+1;}
-
-function normalizeKeyword_(s){
-  return String(s||"").toUpperCase().replace(/[^A-Z0-9]+/g," ").replace(/\s+/g," ").trim();
-}
-
-function commentMatchesKeyword_(text){
-  const keyword=PropertiesService.getScriptProperties().getProperty("IG_COMMENT_KEYWORD")||"REY MAU";
-  const hay=normalizeKeyword_(text), needle=normalizeKeyword_(keyword);
-  return Boolean(needle && (hay===needle || hay.indexOf(needle)!==-1));
-}
-
-function socialCommentExists_(commentId){
-  if(!commentId)return false;
-  const sh=socialLeadsSheet_(),last=sh.getLastRow();
-  if(last<2)return false;
-  return sh.getRange(2,colSocial_("Comment ID"),last-1,1).getValues()
-    .some(r=>String(r[0]||"")===String(commentId));
-}
-
-function logSocialLead_(row){
-  const sh=socialLeadsSheet_();
-  const o=SOCIAL_LEADS_HEADERS.map(h=>row[h]||"");
-  sh.appendRow(o);
-}
-
-
-function setupSocialAutomation_(){
-  const props=PropertiesService.getScriptProperties();
-  if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
-  if(!props.getProperty("IG_PUBLIC_COMMENT_REPLY"))props.setProperty("IG_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
-  if(!props.getProperty("TIKTOK_COMMENT_KEYWORD"))props.setProperty("TIKTOK_COMMENT_KEYWORD","REY MAU");
-  if(!props.getProperty("TIKTOK_PUBLIC_COMMENT_REPLY"))props.setProperty("TIKTOK_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
-  if(!props.getProperty("TIKTOK_API_VERSION"))props.setProperty("TIKTOK_API_VERSION","v1.3");
-  socialLeadsSheet_();
-  return json_({ok:true,message:"Social automation defaults ready. Add platform credentials in Script Properties."});
-}
-
-function socialReplyText_(platform,username){
-  const who=username?(" @"+String(username).replace(/^@/,"")):"";
-  const wa=socialWaLink_(username||("lead "+platform));
-  return "Halo"+who+"! 👋 Makasih sudah tertarik dengan Sonjaya. Kami bantu bisnis dengan remote support dan automation berbasis AI. Kalau mau lanjut, chat WhatsApp di sini:"+(wa?"\n"+wa:"");
-}
-
-function sendInstagramDm_(recipientId,text){
-  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
-  const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
-  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  const host=PropertiesService.getScriptProperties().getProperty("IG_GRAPH_HOST") ||
-    PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST") ||
-    "https://graph.instagram.com";
-  if(!token||!igUserId)throw new Error("INSTAGRAM_MESSAGING_NOT_CONFIGURED");
-  return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(igUserId)+"/messages",{
-    method:"post",
-    contentType:"application/json",
-    headers:{Authorization:"Bearer "+token},
-    payload:JSON.stringify({recipient:{id:String(recipientId)},message:{text:String(text||"").slice(0,1000)}}),
-    muteHttpExceptions:true
-  });
-}
-
-function handleInstagramMessages_(body){
-  let processed=0,replied=0,errors=0;
-  const entries=Array.isArray(body&&body.entry)?body.entry:[];
-  entries.forEach(function(entry){
-    const messaging=Array.isArray(entry&&entry.messaging)?entry.messaging:[];
-    messaging.forEach(function(item){
-      const sender=item&&item.sender||{}, recipient=item&&item.recipient||{};
-      const senderId=String(sender.id||""), recipientId=String(recipient.id||"");
-      const msg=item&&item.message||{};
-      const text=String(msg.text||"").trim();
-      if(!senderId||!text)return;
-      const ownId=String(PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"");
-      if(ownId&&senderId===ownId)return;
-      processed++;
-      try{
-        const username=String(msg.username||sender.username||"");
-        const reply=socialReplyText_("Instagram",username);
-        const result=sendInstagramDm_(senderId,reply);
-        replied++;
-        logSocialLead_({
-          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"Instagram",
-          "Keyword":"",
-          "Username":username,
-          "User ID":senderId,
-          "Comment ID":"",
-          "Comment":text,
-          "Post ID":"",
-          "DM Status":"DM_AUTO_REPLY_SENT",
-          "WhatsApp Link":socialWaLink_(username||"Instagram lead"),
-          "Catatan":"Inbound DM auto-reply | "+JSON.stringify(result).slice(0,700)
-        });
-      }catch(err){
-        errors++;
-        logSocialLead_({
-          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"Instagram",
-          "Keyword":"",
-          "Username":"",
-          "User ID":senderId,
-          "Comment ID":"",
-          "Comment":text,
-          "Post ID":"",
-          "DM Status":"DM_AUTO_REPLY_ERROR",
-          "WhatsApp Link":"",
-          "Catatan":String(err).slice(0,700)
-        });
-      }
-    });
-  });
-  return json_({ok:true,platform:"instagram",processed:processed,replied:replied,errors:errors});
-}
-
-function handleInstagramWebhook_(body){
-  let result={comments:null,messages:null};
-  result.comments=handleInstagramCommentsOnly_(body);
-  result.messages=handleInstagramMessages_(body);
-  return json_({ok:true,platform:"instagram",comments:result.comments,messages:result.messages});
-}
-
-function handleInstagramCommentsOnly_(body){
-  let processed=0,matched=0,dmSent=0,publicReply=0,errors=0;
-  const entries=Array.isArray(body&&body.entry)?body.entry:[];
-  entries.forEach(function(entry){
-    const changes=Array.isArray(entry&&entry.changes)?entry.changes:[];
-    changes.forEach(function(change){
-      const field=String(change.field||"").toLowerCase();
-      if(field!=="comments")return;
-      const v=change.value||{}, commentId=String(v.id||v.comment_id||""), text=String(v.text||"");
-      const from=v.from||{}, userId=String(from.id||""), username=String(from.username||from.name||"");
-      const media=v.media||{}, postId=String(media.id||v.media_id||"");
-      processed++;
-      if(!commentId||!commentMatchesKeyword_(text)||socialCommentExists_(commentId))return;
-      matched++;
-      const wa=socialWaLink_(username||"Instagram lead");
-      let dmStatus="NO_WA_NUMBER",note="Keyword cocok.";
-      try{
-        const msg=socialReplyText_("Instagram",username);
-        const result=sendInstagramPrivateReply_(commentId,msg);
-        dmStatus="DM_SENT";
-        note="DM="+JSON.stringify(result).slice(0,500);
-        dmSent++;
-        const publicText=PropertiesService.getScriptProperties().getProperty("IG_PUBLIC_COMMENT_REPLY")||"Siap! 👋 Cek DM ya.";
-        try{
-          const publicResult=sendInstagramPublicReply_(commentId,publicText);
-          publicReply++;
-          dmStatus="DM_SENT_PUBLIC_REPLY_SENT";
-          note+=" | PUBLIC="+JSON.stringify(publicResult).slice(0,500);
-        }catch(publicErr){
-          dmStatus="DM_SENT_PUBLIC_REPLY_ERROR";
-          note+=" | PUBLIC_ERROR="+String(publicErr).slice(0,500);
-          errors++;
-        }
-      }catch(err){
-        dmStatus="DM_ERROR";
-        note=String(err).slice(0,800);
-        errors++;
-      }
-      logSocialLead_({
-        "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-        "Platform":"Instagram",
-        "Keyword":PropertiesService.getScriptProperties().getProperty("IG_COMMENT_KEYWORD")||"REY MAU",
-        "Username":username,
-        "User ID":userId,
-        "Comment ID":commentId,
-        "Comment":text,
-        "Post ID":postId,
-        "DM Status":dmStatus,
-        "WhatsApp Link":wa,
-        "Catatan":note
-      });
-    });
-  });
-  return {processed:processed,matched:matched,dm_sent:dmSent,public_reply:publicReply,errors:errors};
-}
-
-function tiktokBaseUrl_(){
-  const v=PropertiesService.getScriptProperties().getProperty("TIKTOK_API_VERSION")||"v1.3";
-  return "https://business-api.tiktok.com/open_api/"+v;
-}
-
-function tiktokToken_(){
-  const token=PropertiesService.getScriptProperties().getProperty("TIKTOK_ACCESS_TOKEN")||"";
-  if(!token)throw new Error("TIKTOK_ACCESS_TOKEN_NOT_CONFIGURED");
-  return token;
-}
-
-function tiktokBusinessId_(){
-  const id=PropertiesService.getScriptProperties().getProperty("TIKTOK_BUSINESS_ID")||"";
-  if(!id)throw new Error("TIKTOK_BUSINESS_ID_NOT_CONFIGURED");
-  return id;
-}
-
-function tiktokJson_(path,payload,method){
-  const opts={
-    method:method||"post",
-    contentType:"application/json",
-    headers:{"Access-Token":tiktokToken_()},
-    muteHttpExceptions:true
-  };
-  if(payload)opts.payload=JSON.stringify(payload);
-  return urlFetchJson_(tiktokBaseUrl_()+path,opts);
-}
-
-function tiktokKeywordMatch_(text){
-  const keyword=PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU";
-  const hay=normalizeKeyword_(text), needle=normalizeKeyword_(keyword);
-  return Boolean(needle && (hay===needle || hay.indexOf(needle)!==-1));
-}
-
-function tiktokMessageText_(content){
-  if(content==null)return "";
-  if(typeof content==="string"){
-    try{return tiktokMessageText_(JSON.parse(content));}catch(e){return String(content);}
-  }
-  if(typeof content!=="object")return String(content);
-  return String(
-    content.text ||
-    (content.message&&content.message.text&&content.message.text.body) ||
-    (content.text&&content.text.body) ||
-    content.body ||
-    content.comment_text ||
-    ""
-  );
-}
-
-function tiktokUserName_(content){
-  if(!content||typeof content!=="object")return "";
-  const u=content.from_user||content.from||content.user||content.sender||{};
-  return String(u.username||u.nickname||u.name||"");
-}
-
-function tiktokSendDm_(conversationId,text){
-  return tiktokJson_("/business/message/send/",{
-    business_id:tiktokBusinessId_(),
-    recipient_type:"CONVERSATION",
-    recipient:String(conversationId),
-    message_type:"TEXT",
-    text:{body:String(text||"").slice(0,6000)}
-  },"post");
-}
-
-function tiktokSendCommentDm_(commentId,text){
-  return tiktokJson_("/business/message/send/",{
-    business_id:tiktokBusinessId_(),
-    message_type:"TEXT",
-    text:{body:String(text||"").slice(0,6000)},
-    direct_reply:{
-      reply_type:"COMMENT_REPLY",
-      comment_reply:{comment_id:String(commentId)}
-    }
-  },"post");
-}
-
-function tiktokGetComment_(commentId,videoId){
-  const businessId=tiktokBusinessId_();
-  const ids=encodeURIComponent(JSON.stringify([String(commentId)]));
-  const url=tiktokBaseUrl_()+"/business/comment/list/?business_id="+encodeURIComponent(businessId)+
-    "&video_id="+encodeURIComponent(String(videoId))+
-    "&comment_ids="+ids+
-    "&max_count=1";
-  const data=urlFetchJson_(url,{
-    method:"get",
-    headers:{"Access-Token":tiktokToken_()},
-    muteHttpExceptions:true
-  });
-  const list=data&&data.data&&data.data.comments;
-  const item=Array.isArray(list)&&list.length?list[0]:null;
-  return item||null;
-}
-
-function tiktokReplyComment_(videoId,commentId,text){
-  return tiktokJson_("/business/comment/reply/create/",{
-    business_id:tiktokBusinessId_(),
-    video_id:String(videoId),
-    comment_id:String(commentId),
-    text:String(text||"").slice(0,1500)
-  },"post");
-}
-
-function tiktokEventObject_(body){
-  if(!body)return {};
-  if(body.content&&typeof body.content==="string"){
-    try{return JSON.parse(body.content||"{}");}catch(e){}
-  }
-  if(body.content&&typeof body.content==="object")return body.content;
-  return body;
-}
-
-function socialEventKey_(platform,eventId){
-  return String(platform)+":"+String(eventId||"");
-}
-
-function socialEventExists_(eventKey){
-  const sh=socialLeadsSheet_(),last=sh.getLastRow();
-  if(last<2)return false;
-  const col=colSocial_("Catatan");
-  return sh.getRange(2,col,last-1,1).getValues().some(r=>String(r[0]||"").indexOf("EVENT_KEY="+eventKey)===0);
-}
-
-function handleTikTokWebhook_(body){
-  const event=String(body&&body.event||body&&body.webhook_event_type||"").toLowerCase();
-  const content=tiktokEventObject_(body);
-  const eventId=String(body&&body.event_id||body&&body.request_id||content.event_id||content.message_id||content.comment_id||Utilities.getUuid());
-  const key=socialEventKey_("tiktok",eventId);
-  if(socialEventExists_(key))return json_({ok:true,platform:"tiktok",duplicate:true,event:event});
-
-  let dmSent=0,publicReply=0,errors=0;
-  try{
-    if(event==="im_receive_high_intent_comment" || event.indexOf("high_intent_comment")>=0){
-      const commentId=String(content.comment_id||"");
-      const username=tiktokUserName_(content);
-      if(commentId){
-        const result=tiktokSendCommentDm_(commentId,socialReplyText_("TikTok",username));
-        dmSent++;
-        logSocialLead_({
-          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"TikTok",
-          "Keyword":"HIGH_INTENT",
-          "Username":username,
-          "User ID":String(content.unique_identifier||""),
-          "Comment ID":commentId,
-          "Comment":String(content.comment_text||""),
-          "Post ID":String(content.video_id||""),
-          "DM Status":"DM_SENT",
-          "WhatsApp Link":socialWaLink_(username),
-          "Catatan":"EVENT_KEY="+key+" | "+JSON.stringify(result).slice(0,700)
-        });
-      }
-    } else if(event==="im_receive_message" || event.indexOf("receive_message")>=0){
-      const conversationId=String(content.conversation_id||content.conversation||"");
-      const textIn=String(tiktokMessageText_(content)||"").trim();
-      const fromUser=content&&content.from_user||{};
-      const fromRole=String(fromUser.role||"personal_account");
-      if(conversationId && textIn && fromRole!=="business_account"){
-        const username=tiktokUserName_(content);
-        const result=tiktokSendDm_(conversationId,socialReplyText_("TikTok",username));
-        dmSent++;
-        logSocialLead_({
-          "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-          "Platform":"TikTok",
-          "Keyword":"",
-          "Username":username,
-          "User ID":String(fromUser.id||""),
-          "Comment ID":"",
-          "Comment":textIn,
-          "Post ID":"",
-          "DM Status":"DM_AUTO_REPLY_SENT",
-          "WhatsApp Link":socialWaLink_(username),
-          "Catatan":"EVENT_KEY="+key+" | "+JSON.stringify(result).slice(0,700)
-        });
-      }
-    } else if(event==="comment.update" || event.indexOf("comment")>=0){
-      const commentId=String(content.comment_id||content.id||"");
-      const videoId=String(content.video_id||content.item_id||"");
-      let commentText=String(content.comment_text||content.text||"").trim();
-      const action=String(content.comment_action||content.action||"").toLowerCase();
-
-      // TikTok comment.update webhook does not include comment text.
-      if(!commentText && commentId && videoId && action!=="delete"){
-        const item=tiktokGetComment_(commentId,videoId);
-        commentText=String(item&&item.text||"").trim();
-      }
-      if(commentId && videoId && commentText && tiktokKeywordMatch_(commentText)){
-        const username=tiktokUserName_(content);
-        const msg=socialReplyText_("TikTok",username);
-        const dmResult=tiktokSendCommentDm_(commentId,msg);
-        dmSent++;
-        let publicText="Siap! 👋 Cek DM ya, gue kirim info lanjut.";
-        try{
-          const publicResult=tiktokReplyComment_(videoId,commentId,publicText);
-          publicReply++;
-          logSocialLead_({
-            "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-            "Platform":"TikTok",
-            "Keyword":PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU",
-            "Username":username,
-            "User ID":String(content.unique_identifier||""),
-            "Comment ID":commentId,
-            "Comment":commentText,
-            "Post ID":videoId,
-            "DM Status":"DM_SENT_PUBLIC_REPLY_SENT",
-            "WhatsApp Link":socialWaLink_(username),
-            "Catatan":"EVENT_KEY="+key+" | DM="+JSON.stringify(dmResult).slice(0,500)+" | PUBLIC="+JSON.stringify(publicResult).slice(0,500)
-          });
-        }catch(publicErr){
-          logSocialLead_({
-            "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-            "Platform":"TikTok",
-            "Keyword":PropertiesService.getScriptProperties().getProperty("TIKTOK_COMMENT_KEYWORD")||"REY MAU",
-            "Username":username,
-            "User ID":String(content.unique_identifier||""),
-            "Comment ID":commentId,
-            "Comment":commentText,
-            "Post ID":videoId,
-            "DM Status":"DM_SENT_PUBLIC_REPLY_ERROR",
-            "WhatsApp Link":socialWaLink_(username),
-            "Catatan":"EVENT_KEY="+key+" | DM="+JSON.stringify(dmResult).slice(0,500)+" | PUBLIC_ERROR="+String(publicErr).slice(0,500)
-          });
-        }
-      }
-    }
-  }catch(err){
-    errors++;
-    logSocialLead_({
-      "Tanggal":Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"),
-      "Platform":"TikTok",
-      "Keyword":"",
-      "Username":tiktokUserName_(content),
-      "User ID":String(content.unique_identifier||""),
-      "Comment ID":String(content.comment_id||""),
-      "Comment":String(content.comment_text||content.text||""),
-      "Post ID":String(content.video_id||""),
-      "DM Status":"AUTOMATION_ERROR",
-      "WhatsApp Link":"",
-      "Catatan":"EVENT_KEY="+key+" | "+String(err).slice(0,900)
-    });
-  }
-  return json_({ok:true,platform:"tiktok",event:event,dm_sent:dmSent,public_reply:publicReply,errors:errors});
-}
-function sendInstagramPrivateReply_(commentId,text){
-  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
-  const igUserId=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
-  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  const host=PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com";
-  if(!token||!igUserId)throw new Error("INSTAGRAM_MESSAGING_NOT_CONFIGURED");
-  return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(igUserId)+"/messages",{
-    method:"post",
-    contentType:"application/json",
-    headers:{Authorization:"Bearer "+token},
-    payload:JSON.stringify({recipient:{comment_id:String(commentId)},message:{text:String(text||"").slice(0,1000)}}),
-    muteHttpExceptions:true
-  });
-}
-
-function sendInstagramPublicReply_(commentId,text){
-  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
-  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  const host=PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST")||"https://graph.instagram.com";
-  if(!token)throw new Error("INSTAGRAM_NOT_CONFIGURED");
-  return urlFetchJson_(host+"/"+version+"/"+encodeURIComponent(commentId)+"/replies",{
-    method:"post",
-    payload:{message:String(text||"").slice(0,1000)},
-    headers:{Authorization:"Bearer "+token},
-    muteHttpExceptions:true
-  });
-}
-
 function contentPlanningSheet_(){
   const ss=SpreadsheetApp.getActiveSpreadsheet();
   let sh=ss.getSheetByName(CONTENT_PLAN_SHEET);
@@ -612,9 +154,9 @@ function socialWaLink_(username){
 
 function onOpen(){
   SpreadsheetApp.getUi().createMenu("Sonjaya")
-    .addItem("Kirim Lead Terpilih","sendSelectedRows_")
-    .addItem("Pasang Kontrol Manual Send","setup")
-    .addItem("Setup Social Automation","setupSocialAutomation_")
+    .addItem("Status Sistem","systemStatus")
+    .addItem("Jalankan Sales Cycle Sekarang","salesAutomation_")
+    .addItem("Pasang Automation 2 Jam","setup")
     .addToUi();
 }
 
@@ -694,207 +236,56 @@ function sendSelectedRows_(){
 
 function doGet(e){
   const p=(e&&e.parameter)||{};
-  // Meta webhook handshake must return the challenge as fast as possible.
-  // Do not call Script Properties, Sheets, or external APIs on this path.
-  // The verify token is used by Meta during registration; webhook POSTs are the
-  // actual event path and should be secured separately with Meta signature checks.
-  if(p["hub.mode"]==="subscribe" && p["hub.challenge"]){
-    return ContentService.createTextOutput(String(p["hub.challenge"]))
-      .setMimeType(ContentService.MimeType.TEXT);
-  }
-  if(String(p.check||"").toLowerCase()==="social"){
-    return socialHealth_();
-  }
-  return json_({ok:true,service:"Sonjaya Remote Agency",status:"running"});
+  if(String(p.check||"").toLowerCase()==="health")return liveHealth_();
+  return json_({ok:true,service:"Sonjaya Remote Agency",status:"running",flows:["sales","content"]});
 }
 
 function liveHealth_(){
   const props=PropertiesService.getScriptProperties();
-  const triggers=ScriptApp.getProjectTriggers();
-  const handlers=triggers.map(t=>t.getHandlerFunction());
+  const handlers=ScriptApp.getProjectTriggers().map(function(t){return t.getHandlerFunction();});
   const ss=SpreadsheetApp.getActiveSpreadsheet();
-  const names=ss.getSheets().map(s=>s.getName());
+  const names=ss.getSheets().map(function(s){return s.getName();});
+  let quota=0; try{quota=MailApp.getRemainingDailyQuota();}catch(e){}
   return json_({
     ok:true,
     service:"Sonjaya Remote Agency",
     version:CODE_VERSION,
+    flows:{sales:true,content:true,social_automation:false,social_auto_publish:false},
     sheets:{
       prospects:names.indexOf(SHEET_NAME)>=0,
       content_planning:names.indexOf(CONTENT_PLAN_SHEET)>=0,
-      social_leads:names.indexOf(SOCIAL_LEADS_SHEET)>=0
+      content:names.indexOf(CONTENT_SHEET)>=0
     },
     properties:{
       webhook_token:Boolean(props.getProperty("WEBHOOK_TOKEN")),
       wa_number:Boolean(props.getProperty("WA_NUMBER")),
-      meta_verify_token:Boolean(props.getProperty("META_VERIFY_TOKEN")),
-      ig_user_id:Boolean(props.getProperty("IG_USER_ID")),
-      ig_access_token:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
-      ig_comment_keyword:Boolean(props.getProperty("IG_COMMENT_KEYWORD")),
-      ig_content_publish:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
-      tiktok_business_id:Boolean(props.getProperty("TIKTOK_BUSINESS_ID")),
-      tiktok_access_token:Boolean(props.getProperty("TIKTOK_ACCESS_TOKEN")),
-      tiktok_comment_keyword:Boolean(props.getProperty("TIKTOK_COMMENT_KEYWORD")),
-      tiktok_publish_note:"TikTok photo auto-posting requires a verified public URL prefix and video.publish authorization."
+      gemini_api_key:Boolean(props.getProperty("GEMINI_API_KEY"))
     },
+    email:{remaining_daily_quota:quota,batch_target:BATCH_SEND_LIMIT,max_daily_target:MAX_DAILY_AUTOMATED_SENDS},
     triggers:{
-      hourlyAutomation:handlers.indexOf("hourlyAutomation_")>=0,
-      manualSendOnEdit:handlers.indexOf("manualSendOnEdit_")>=0
+      salesAutomation:handlers.indexOf("salesAutomation_")>=0,
+      legacyHourly:handlers.indexOf("hourlyAutomation_")>=0,
+      legacyManualSend:handlers.indexOf("manualSendOnEdit_")>=0
     }
   });
-}
-
-function socialHealth_(){
-  const props=PropertiesService.getScriptProperties();
-  const configuredHost=props.getProperty("IG_GRAPH_HOST") ||
-    props.getProperty("IG_MESSAGING_HOST") || "";
-  const hosts=[
-    configuredHost,
-    "https://graph.instagram.com",
-    "https://graph.facebook.com"
-  ].filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;});
-
-  const out={
-    ok:true,
-    version:CODE_VERSION,
-    webhook:{
-      meta_verify_token:Boolean(props.getProperty("META_VERIFY_TOKEN")),
-      webhook_token:Boolean(props.getProperty("WEBHOOK_TOKEN")),
-      deployed_web_app:"doGet/doPost handlers present"
-    },
-    instagram:{
-      configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
-      host:configuredHost||"auto-detect",
-      api_version:props.getProperty("IG_API_VERSION")||"v26.0",
-      user_id_configured:Boolean(props.getProperty("IG_USER_ID")),
-      token_configured:Boolean(props.getProperty("IG_ACCESS_TOKEN")),
-      api_ok:false,
-      account:null,
-      error:null
-    },
-    tiktok:{
-      configured:Boolean(props.getProperty("TIKTOK_ACCESS_TOKEN")),
-      business_id_configured:Boolean(props.getProperty("TIKTOK_BUSINESS_ID")),
-      token_configured:Boolean(props.getProperty("TIKTOK_ACCESS_TOKEN")),
-      api_ok:false,
-      creator:null,
-      error:null
-    }
-  };
-
-  if(out.instagram.configured){
-    let lastError="";
-    const knownIgId=String(props.getProperty("IG_USER_ID")||"");
-    for(let i=0;i<hosts.length;i++){
-      const host=hosts[i];
-      try{
-        let me=null;
-        if(host==="https://graph.instagram.com"){
-          me=instagramGetHost_(host,"/me",{fields:"id,username"});
-        }else if(host==="https://graph.facebook.com"){
-          if(knownIgId){
-            me=instagramGetHost_(host,"/"+encodeURIComponent(knownIgId),{fields:"id,username,name"});
-          }else{
-            const pages=instagramGetHost_(host,"/me/accounts",{
-              fields:"id,name,instagram_business_account{id,username}"
-            });
-            const data=Array.isArray(pages&&pages.data)?pages.data:[];
-            for(let j=0;j<data.length;j++){
-              const iga=data[j]&&data[j].instagram_business_account;
-              if(iga&&iga.id){
-                me={id:iga.id,username:iga.username||"",source:"instagram_business_account",page_id:data[j].id};
-                break;
-              }
-            }
-            if(!me)lastError="Facebook /me/accounts returned no instagram_business_account: "+JSON.stringify(pages||{}).slice(0,900);
-          }
-        }
-        if(me&&me.id){
-          out.instagram.api_ok=true;
-          out.instagram.host=host;
-          out.instagram.account={
-            id:String(me.id),
-            username:String(me.username||me.name||"")
-          };
-          props.setProperty("IG_USER_ID",String(me.id));
-          props.setProperty("IG_GRAPH_HOST",host);
-          props.setProperty("IG_MESSAGING_HOST",host);
-          break;
-        }
-        if(!lastError)lastError=JSON.stringify(me||{}).slice(0,900);
-      }catch(err){
-        lastError=String(err).slice(0,900);
-      }
-    }
-    if(!out.instagram.api_ok){
-      out.instagram.error="Instagram API probe gagal pada semua host. "+lastError;
-    }
-  }else{
-    out.instagram.error="IG_ACCESS_TOKEN belum diisi di Script Properties.";
-  }
-
-  if(out.tiktok.configured){
-    try{
-      const creator=tiktokPublishRequest_("/post/publish/creator_info/query/",{});
-      const code=String(creator&&creator.error&&creator.error.code||"");
-      out.tiktok.api_ok=code==="ok" && Boolean(creator&&creator.data);
-      if(out.tiktok.api_ok){
-        out.tiktok.creator={
-          username:String(creator.data.creator_username||""),
-          privacy_level_options:Array(creator.data.privacy_level_options||[])
-        };
-      }else{
-        out.tiktok.error="TikTok creator_info failed: "+JSON.stringify(creator).slice(0,900);
-      }
-    }catch(err){
-      out.tiktok.error=String(err).slice(0,900);
-    }
-  }else{
-    out.tiktok.error="TIKTOK_ACCESS_TOKEN belum diisi.";
-  }
-
-  out.ok=Boolean(out.webhook.meta_verify_token && out.instagram.api_ok);
-  return json_(out);
-}
-
-function instagramGetHost_(host,path,params){
-  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  const qs=Object.keys(params||{}).map(function(k){
-    return encodeURIComponent(k)+"="+encodeURIComponent(String(params[k]));
-  }).join("&");
-  return urlFetchJson_(host+"/"+version+path+(qs?"?"+qs:""),{
-    method:"get",
-    headers:{Authorization:"Bearer "+instagramToken_()},
-    muteHttpExceptions:true
-  });
-}
-
-function socialHealth(){
-  const result = socialHealth_();
-  try {
-    SpreadsheetApp.getUi().alert("SOCIAL HEALTH RESULT\n\n" + result);
-  } catch (e) {
-    console.log(result);
-  }
-  return result;
 }
 
 function doPost(e){
   try{
     const body=JSON.parse((e.postData&&e.postData.contents)||"{}");
-    if(body && body.object==="instagram")return handleInstagramWebhook_(body);
-    if(body && (body.event || body.webhook_event_type || body.client_key) && !body.action)return handleTikTokWebhook_(body);
     if(!auth_(body))return json_({ok:false,error:"Unauthorized"});
-    const a=body.action||"ingest";
-    if(a==="healthcheck")return liveHealth_();
-    if(a==="social_health")return socialHealth_();
-    if(a==="ingest")return ingest_(body.rows||[]);
-    if(a==="repair_layout")return repairProspectLayout_();
-    if(a==="send_queue")return sendQueue_(Number(body.limit||DAILY_SEND_LIMIT));
-    if(a==="scan_replies")return scanReplies_(Number(body.limit||20));
-    if(a==="process_followups")return processFollowups_(Number(body.limit||MAX_FOLLOWUPS_PER_RUN));
-    if(a==="mark_error")return markError_(String(body.id||""),String(body.error||""));
-    if(a==="content_ingest")return ingestContent_(body.rows||[]);
-    if(a==="publish_social")return publishSocial_(body);
+    const action=String(body.action||"healthcheck");
+    if(action==="healthcheck")return liveHealth_();
+    if(action==="ingest")return ingest_(body.rows||[]);
+    if(action==="repair_layout")return repairProspectLayout_();
+    if(action==="send_batch")return autoSendBatch_(Number(body.limit||BATCH_SEND_LIMIT));
+    if(action==="send_queue")return autoSendBatch_(Number(body.limit||BATCH_SEND_LIMIT));
+    if(action==="scan_replies")return scanReplies_(Number(body.limit||40));
+    if(action==="process_followups")return processFollowups_(Number(body.limit||MAX_FOLLOWUPS_PER_RUN));
+    if(action==="sales_cycle")return salesAutomation_();
+    if(action==="setup_automation")return setup();
+    if(action==="mark_error")return markError_(String(body.id||""),String(body.error||""));
+    if(action==="content_ingest")return ingestContent_(body.rows||[]);
     return json_({ok:false,error:"Unknown action"});
   }catch(err){return json_({ok:false,error:String(err)});}
 }
@@ -978,8 +369,64 @@ function outboundToday_(values,idx){
   return n;
 }
 
+function autoSendBatch_(limit){
+  const sh=sheet_(),last=sh.getLastRow();
+  const quota=Math.max(0,MailApp.getRemainingDailyQuota());
+  if(last<2)return json_({ok:true,sent:0,errors:0,candidates:0,quota_before:quota,quota_after:quota});
+  const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
+  const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
+  const candidates=[];
+  for(let i=0;i<values.length;i++){
+    const r=values[i];
+    const status=String(r[idx["Status"]]||"").toUpperCase().trim();
+    const opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
+    const attempts=Number(r[idx["Attempts"]]||0);
+    const email=String(r[idx["Email"]]||"").trim();
+    const subject=String(r[idx["Subject"]]||"").trim();
+    const body=String(r[idx["Body"]]||"").trim();
+    if(status!=="READY"||opt==="YES"||attempts>=MAX_ATTEMPTS||!email||!subject||!body)continue;
+    candidates.push({row:i+2,score:Number(r[idx["Skor"]]||0)});
+  }
+  candidates.sort(function(x,y){return y.score-x.score;});
+  const maxToSend=Math.min(BATCH_SEND_LIMIT,Math.max(1,Number(limit||BATCH_SEND_LIMIT)),quota);
+  const lock=LockService.getDocumentLock();
+  lock.waitLock(20000);
+  let sent=0,errors=0;
+  try{
+    for(let i=0;i<candidates.length&&sent<maxToSend;i++){
+      const rowNum=candidates[i].row;
+      const status=String(sh.getRange(rowNum,col_("Status")).getValue()||"").toUpperCase().trim();
+      if(status!=="READY")continue;
+      const email=String(sh.getRange(rowNum,col_("Email")).getValue()||"").trim();
+      const subject=String(sh.getRange(rowNum,col_("Subject")).getValue()||"").trim();
+      const body=String(sh.getRange(rowNum,col_("Body")).getValue()||"").trim();
+      const leadId=String(sh.getRange(rowNum,col_("Lead ID")).getValue()||"");
+      if(!email||!subject||!body||!leadId)continue;
+      try{
+        const tagged=/^\[SJ-[a-f0-9]{12}\]/i.test(subject)?subject:"[SJ-"+leadId+"] "+subject;
+        MailApp.sendEmail({to:email,subject:tagged,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
+        sh.getRange(rowNum,col_("Subject")).setValue(tagged);
+        const first=now_();
+        sh.getRange(rowNum,col_("Status")).setValue("SENT");
+        scheduleAfterManualSend_(rowNum,first);
+        sh.getRange(rowNum,col_("Last Error")).clearContent();
+        sh.getRange(rowNum,col_(MANUAL_SEND_COL)).setValue(false);
+        sh.getRange(rowNum,col_(SEND_RESULT_COL)).setValue("AUTO_SENT "+Utilities.formatDate(first,"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
+        sent++;
+        Utilities.sleep(750);
+      }catch(err){
+        errors++;
+        markError_(leadId,String(err));
+      }
+    }
+  }finally{
+    try{lock.releaseLock();}catch(e){}
+  }
+  return json_({ok:true,requested:BATCH_SEND_LIMIT,candidates:candidates.length,sent:sent,errors:errors,quota_before:quota,quota_after:Math.max(0,MailApp.getRemainingDailyQuota())});
+}
+
 function sendQueue_(limit){
-  return json_({ok:true,auto_send:false,sent:0,message:"Automatic initial email sending is disabled. Use Manual Send in the Prospects sheet."});
+  return autoSendBatch_(limit||BATCH_SEND_LIMIT);
 }
 
 function findThreadByLeadId_(id){
@@ -1026,7 +473,7 @@ function processFollowups_(limit){
   const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
   const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
   const sentToday=outboundToday_(values,idx);
-  let remaining=Math.max(0,Math.min(MailApp.getRemainingDailyQuota(),DAILY_SEND_LIMIT-sentToday));
+  let remaining=Math.max(0,MailApp.getRemainingDailyQuota());
   const now=now_(); let processed=0;
   const maxItems=Math.min(Math.max(1,limit||MAX_FOLLOWUPS_PER_RUN),remaining);
   for(let i=0;i<values.length&&processed<maxItems;i++){
@@ -1194,54 +641,31 @@ function scanReplies_(limit){
   return json_({ok:true,replied:replied,matched:matched,ai_replied:aiReplied,ai_fallback:aiFallback,scanned_threads:threads.length});
 }
 function ingestContent_(rows){
-  const planningRows=rows.filter(function(r){
-    const mode=String(r.publish_mode||"");
-    return mode==="PLANNING_ONLY" || mode==="AUTO_PUBLISH_DAILY";
-  });
-  const legacyRows=rows.filter(function(r){
-    const mode=String(r.publish_mode||"");
-    return mode!=="PLANNING_ONLY" && mode!=="AUTO_PUBLISH_DAILY";
-  });
-  let addedPlanning=0,addedLegacy=0;
-
-  if(planningRows.length){
-    const sh=contentPlanningSheet_(), existing={};
-    if(sh.getLastRow()>=2){
-      const all=sh.getRange(2,1,sh.getLastRow()-1,2).getValues();
-      all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])]=true;});
-    }
-    planningRows.forEach(function(r){
-      const key=String(r.date)+"|"+String(r.platform);
-      if(existing[key])return;
-      sh.appendRow([
-        r.date,r.platform,r.format||"CAROUSEL_7_SLIDES",r.objective||"",
-        r.topic||"",r.hook||"",r.caption||"",r.cta||"",
-        Number(r.slide_count||7),r.carousel_pdf_url||"",r.carousel_cover_url||"",
-        r.slides_json||"",r.status||"PLANNED",String(r.publish_mode||"PLANNING_ONLY"),
-        r.catatan||"Content plan"
-      ]);
-      existing[key]=true; addedPlanning++;
-    });
+  const sh=contentPlanningSheet_(),existing={};
+  if(sh.getLastRow()>=2){
+    const all=sh.getRange(2,1,sh.getLastRow()-1,2).getValues();
+    all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])]=true;});
   }
-
-  if(legacyRows.length){
-    const sh=contentSheet_(), existing={};
-    if(sh.getLastRow()>=2){
-      const all=sh.getRange(2,1,sh.getLastRow()-1,4).getValues();
-      all.forEach(function(r){existing[String(r[0])+"|"+String(r[1])+"|"+String(r[3])]=true;});
-    }
-    legacyRows.forEach(function(r){
-      const key=String(r.date)+"|"+String(r.platform)+"|"+String(r.topic);
-      if(existing[key])return;
-      sh.appendRow([
-        r.date,r.platform,r.format,r.topic,r.hook,r.caption,r.cta,r.visual_prompt,
-        r.asset_url||"",r.status||"PLANNED",r.publish_result||"NOT_UPLOADED"
-      ]);
-      existing[key]=true;addedLegacy++;
-    });
-  }
-
-  return json_({ok:true,added_planning:addedPlanning,added_legacy:addedLegacy});
+  const idx={}; CONTENT_PLAN_HEADERS.forEach(function(h,i){idx[h]=i;});
+  let added=0,duplicates=0;
+  rows.forEach(function(r){
+    const key=String(r.date||"")+"|"+String(r.platform||"");
+    if(existing[key]){duplicates++;return;}
+    const row=new Array(CONTENT_PLAN_HEADERS.length).fill("");
+    function set(h,v){if(idx[h]!==undefined)row[idx[h]]=v==null?"":v;}
+    set("Tanggal",r.date); set("Platform",r.platform||"Instagram");
+    set("Format",r.format||"CAROUSEL_7_SLIDES"); set("Tujuan",r.objective||"");
+    set("Topik",r.topic||""); set("Hook",r.hook||""); set("Caption",r.caption||""); set("CTA",r.cta||"");
+    set("Slide Count",Number(r.slide_count||7)); set("Carousel PDF URL",r.carousel_pdf_url||"");
+    set("Carousel Cover URL",r.carousel_cover_url||""); set("Slides JSON",r.slides_json||"");
+    set("Status",r.status||"READY_FOR_MANUAL_UPLOAD"); set("Publish Mode","MANUAL_UPLOAD");
+    set("Catatan",r.catatan||"Content Studio | upload manual"); set("Pilar Konten",r.content_pillar||"");
+    set("Script Lengkap",r.script||"");
+    const urls=Array.isArray(r.slide_urls)?r.slide_urls:[];
+    for(let i=0;i<7;i++)set("Slide "+(i+1)+" URL",urls[i]||"");
+    sh.appendRow(row); existing[key]=true; added++;
+  });
+  return json_({ok:true,added:added,duplicates:duplicates});
 }
 
 function urlFetchJson_(url,options){
@@ -1253,284 +677,40 @@ function urlFetchJson_(url,options){
   return data;
 }
 
-function instagramGraphBase_(){
-  const version=PropertiesService.getScriptProperties().getProperty("IG_API_VERSION")||"v26.0";
-  const host=PropertiesService.getScriptProperties().getProperty("IG_GRAPH_HOST") ||
-    PropertiesService.getScriptProperties().getProperty("IG_MESSAGING_HOST") ||
-    "https://graph.instagram.com";
-  return host+"/"+version;
-}
-
-function instagramToken_(){
-  const token=PropertiesService.getScriptProperties().getProperty("IG_ACCESS_TOKEN")||"";
-  if(!token)throw new Error("INSTAGRAM_ACCESS_TOKEN_NOT_CONFIGURED");
-  return token;
-}
-
-function instagramUserId_(){
-  const id=PropertiesService.getScriptProperties().getProperty("IG_USER_ID")||"";
-  if(!id)throw new Error("IG_USER_ID_NOT_CONFIGURED");
-  return id;
-}
-
-function instagramPost_(path,params){
-  return urlFetchJson_(instagramGraphBase_()+path,{
-    method:"post",
-    payload:params||{},
-    headers:{Authorization:"Bearer "+instagramToken_()},
-    muteHttpExceptions:true
+function removeAutomationTriggers_(){
+  ScriptApp.getProjectTriggers().forEach(function(t){
+    const fn=t.getHandlerFunction();
+    if(["hourlyAutomation_","manualSendOnEdit_","salesAutomation_"].indexOf(fn)>=0)ScriptApp.deleteTrigger(t);
   });
-}
-
-function instagramGet_(path,params){
-  const qs=Object.keys(params||{}).map(function(k){
-    return encodeURIComponent(k)+"="+encodeURIComponent(String(params[k]));
-  }).join("&");
-  return urlFetchJson_(instagramGraphBase_()+path+(qs?"?"+qs:""),{
-    method:"get",
-    headers:{Authorization:"Bearer "+instagramToken_()},
-    muteHttpExceptions:true
-  });
-}
-
-function waitInstagramContainers_(ids){
-  const pending=(ids||[]).map(String);
-  if(!pending.length)return;
-  for(let attempt=0;attempt<20;attempt++){
-    let allReady=true;
-    for(let i=0;i<pending.length;i++){
-      const status=instagramGet_("/"+encodeURIComponent(pending[i]),{fields:"status_code,status"});
-      const code=String(status.status_code||"").toUpperCase();
-      if(code==="FINISHED")continue;
-      if(code==="ERROR" || code==="EXPIRED")throw new Error("Instagram container "+pending[i]+" status="+JSON.stringify(status));
-      allReady=false;
-    }
-    if(allReady)return;
-    Utilities.sleep(3000);
-  }
-  throw new Error("Instagram media containers did not finish processing in time.");
-}
-
-function publishInstagramCarousel_(imageUrls,caption){
-  const urls=(imageUrls||[]).map(String).filter(Boolean).slice(0,10);
-  if(urls.length<2)throw new Error("Instagram carousel requires at least 2 image URLs.");
-  if(urls.length>10)throw new Error("Instagram carousel supports at most 10 items.");
-  const childIds=[];
-  urls.forEach(function(url){
-    const child=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media",{
-      image_url:url,
-      is_carousel_item:"true"
-    });
-    if(!child.id)throw new Error("Instagram child container missing id: "+JSON.stringify(child));
-    childIds.push(String(child.id));
-  });
-  waitInstagramContainers_(childIds);
-  const parent=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media",{
-    media_type:"CAROUSEL",
-    children:childIds.join(","),
-    caption:String(caption||"").slice(0,2200)
-  });
-  if(!parent.id)throw new Error("Instagram carousel container missing id: "+JSON.stringify(parent));
-  waitInstagramContainers_([String(parent.id)]);
-  const published=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media_publish",{
-    creation_id:String(parent.id)
-  });
-  if(!published.id)throw new Error("Instagram carousel publish failed: "+JSON.stringify(published));
-  return {ok:true,platform:"instagram",media_id:String(published.id),container_id:String(parent.id),children:childIds};
-}
-
-function publishInstagramPhoto_(imageUrl,caption){
-  const url=String(imageUrl||"").trim();
-  if(!url)throw new Error("Missing image_url");
-  const container=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media",{
-    image_url:url,
-    caption:String(caption||"").slice(0,2200)
-  });
-  if(!container.id)throw new Error("Instagram container not created: "+JSON.stringify(container));
-  waitInstagramContainers_([String(container.id)]);
-  const published=instagramPost_("/"+encodeURIComponent(instagramUserId_())+"/media_publish",{
-    creation_id:String(container.id)
-  });
-  if(!published.id)throw new Error("Instagram publish failed: "+JSON.stringify(published));
-  return {ok:true,platform:"instagram",media_id:String(published.id),container_id:String(container.id)};
-}
-
-function tiktokBaseUrl_(){
-  return "https://open.tiktokapis.com/v2";
-}
-
-function tiktokPublishRequest_(path,payload){
-  const token=tiktokToken_();
-  return urlFetchJson_(tiktokBaseUrl_()+path,{
-    method:"post",
-    contentType:"application/json; charset=UTF-8",
-    headers:{Authorization:"Bearer "+token},
-    payload:JSON.stringify(payload),
-    muteHttpExceptions:true
-  });
-}
-
-function publishTikTokPhoto_(imageUrls,caption,title){
-  const urls=(imageUrls||[]).map(String).filter(Boolean).slice(0,35);
-  if(!urls.length)throw new Error("Missing TikTok photo URLs.");
-  let creator=tiktokPublishRequest_("/post/publish/creator_info/query/",{});
-  const options=((creator.data&&creator.data.privacy_level_options)||[]);
-  const privacy=options.indexOf("PUBLIC_TO_EVERYONE")>=0
-    ? "PUBLIC_TO_EVERYONE" : (options[0]||"SELF_ONLY");
-  const payload={
-    post_info:{
-      title:String(title||"Sonjaya").slice(0,150),
-      description:String(caption||"").slice(0,2200),
-      privacy_level:privacy,
-      disable_comment:false,
-      auto_add_music:false,
-      brand_organic_toggle:true
-    },
-    source_info:{
-      source:"PULL_FROM_URL",
-      photo_images:urls,
-      photo_cover_index:0
-    },
-    post_mode:"DIRECT_POST",
-    media_type:"PHOTO"
-  };
-  const result=tiktokPublishRequest_("/post/publish/content/init/",payload);
-  if(result.error && result.error.code && result.error.code!=="ok"){
-    throw new Error("TikTok publish failed: "+JSON.stringify(result.error));
-  }
-  const publishId=String(result.data&&result.data.publish_id||"");
-  if(!publishId)throw new Error("TikTok publish_id missing: "+JSON.stringify(result));
-  return {ok:true,platform:"tiktok",publish_id:publishId};
-}
-
-function contentPlanFindRow_(date,platform){
-  const sh=contentPlanningSheet_(),last=sh.getLastRow();
-  if(last<2)return -1;
-  const vals=sh.getRange(2,1,last-1,CONTENT_PLAN_HEADERS.length).getValues();
-  const dateKey=String(date||"");
-  const platformKey=String(platform||"").toLowerCase();
-  for(let i=0;i<vals.length;i++){
-    const rowDate=String(vals[i][0]||"").slice(0,10);
-    const rowPlatform=String(vals[i][1]||"").toLowerCase();
-    if(rowDate===dateKey && rowPlatform.indexOf(platformKey)>=0)return i+2;
-  }
-  return -1;
-}
-
-function markContentPlanningPublished_(date,platform,result){
-  const row=contentPlanFindRow_(date,platform);
-  if(row<2)return;
-  const sh=contentPlanningSheet_();
-  sh.getRange(row,CONTENT_PLAN_HEADERS.indexOf("Status")+1).setValue(result.ok?"PUBLISHED":"PUBLISH_ERROR");
-  sh.getRange(row,CONTENT_PLAN_HEADERS.indexOf("Catatan")+1).setValue(JSON.stringify(result).slice(0,1500));
-}
-
-function publishSocial_(body){
-  const platform=String(body.platform||"").toLowerCase().trim();
-  const dateKey=String(body.date||"").slice(0,10);
-  const caption=String(body.caption||"").trim();
-  const title=String(body.title||"Sonjaya").trim();
-  const urls=Array.isArray(body.image_urls)?body.image_urls.map(String).filter(Boolean):[];
-  if(!platform)return json_({ok:false,error:"Unsupported platform"});
-  if(!dateKey)throw new Error("Missing date");
-  if(!urls.length)throw new Error("Missing image_urls");
-  const lock=LockService.getScriptLock();
-  lock.waitLock(20000);
-  try{
-    const key="AUTO_PUBLISH:"+platform+":"+dateKey;
-    const props=PropertiesService.getScriptProperties();
-    const prior=props.getProperty(key);
-    if(prior){
-      return json_({ok:true,platform:platform,date:dateKey,duplicate:true,result:JSON.parse(prior)});
-    }
-    let result;
-    if(platform==="instagram"){
-      result=urls.length>=2?publishInstagramCarousel_(urls,caption):publishInstagramPhoto_(urls[0],caption);
-    }else if(platform==="tiktok"){
-      result=publishTikTokPhoto_(urls,caption,title);
-    }else{
-      return json_({ok:false,error:"Unsupported platform"});
-    }
-    props.setProperty(key,JSON.stringify(result));
-    markContentPlanningPublished_(dateKey,platform,result);
-    return json_({ok:true,platform:platform,date:dateKey,result:result});
-  }catch(err){
-    markContentPlanningPublished_(dateKey,platform,{ok:false,error:String(err)});
-    throw err;
-  }finally{
-    try{lock.releaseLock();}catch(e){}
-  }
-}
-
-function markContentPublished_(date,platform,result){
-  const sh=contentSheet_(),last=sh.getLastRow();
-  if(last<2)return;
-  const vals=sh.getRange(2,1,last-1,11).getValues();
-  for(let i=0;i<vals.length;i++){
-    if(String(vals[i][0])===String(date)&&String(vals[i][1]).toLowerCase()===String(platform).toLowerCase()){
-      sh.getRange(i+2,10).setValue(result.ok?"PUBLISHED":"PUBLISH_ERROR");
-      sh.getRange(i+2,11).setValue(JSON.stringify(result));
-    }
-  }
-}
-
-function refreshTikTok_(){
-  const clientId=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_ID")||"";
-  const clientSecret=PropertiesService.getScriptProperties().getProperty("TIKTOK_CLIENT_SECRET")||"";
-  const refresh=PropertiesService.getScriptProperties().getProperty("TIKTOK_REFRESH_TOKEN")||"";
-  if(!clientId||!clientSecret||!refresh)throw new Error("TIKTOK_REFRESH_NOT_CONFIGURED");
-  const res=UrlFetchApp.fetch("https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2/refresh_token/",{
-    method:"post",
-    contentType:"application/json",
-    payload:JSON.stringify({
-      grant_type:"refresh_token",
-      refresh_token:refresh,
-      client_id:clientId,
-      client_secret:clientSecret
-    }),
-    muteHttpExceptions:true
-  });
-  const code=res.getResponseCode(),txt=res.getContentText();
-  let data={}; try{data=JSON.parse(txt||"{}");}catch(e){}
-  if(code<200||code>=300||!data.data||!data.data.access_token){
-    throw new Error("TikTok refresh HTTP "+code+": "+txt.slice(0,700));
-  }
-  const d=data.data;
-  PropertiesService.getScriptProperties().setProperty("TIKTOK_ACCESS_TOKEN",d.access_token);
-  if(d.refresh_token)PropertiesService.getScriptProperties().setProperty("TIKTOK_REFRESH_TOKEN",d.refresh_token);
-  if(d.open_id)PropertiesService.getScriptProperties().setProperty("TIKTOK_BUSINESS_ID",d.open_id);
-  return d.access_token;
 }
 
 function setup(){
-  sheet_();contentSheet_();contentPlanningSheet_();socialLeadsSheet_();setupSocialAutomation_();
-  const props=PropertiesService.getScriptProperties();
-  if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
-  if(!props.getProperty("IG_API_VERSION"))props.setProperty("IG_API_VERSION","v26.0");
-  if(!props.getProperty("IG_MESSAGING_HOST"))props.setProperty("IG_MESSAGING_HOST","https://graph.facebook.com");
-  if(!props.getProperty("IG_GRAPH_HOST"))props.setProperty("IG_GRAPH_HOST","https://graph.facebook.com");
-  if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
-  if(!props.getProperty("IG_PUBLIC_COMMENT_REPLY"))props.setProperty("IG_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
-  if(!props.getProperty("TIKTOK_COMMENT_KEYWORD"))props.setProperty("TIKTOK_COMMENT_KEYWORD","REY MAU");
-  if(!props.getProperty("TIKTOK_PUBLIC_COMMENT_REPLY"))props.setProperty("TIKTOK_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
-  const triggers=ScriptApp.getProjectTriggers();
-  if(!triggers.some(t=>t.getHandlerFunction()==="hourlyAutomation_")){
-    ScriptApp.newTrigger("hourlyAutomation_").timeBased().everyHours(1).create();
-  }
-  const spreadsheetId=SpreadsheetApp.getActiveSpreadsheet().getId();
-  if(!triggers.some(t=>t.getHandlerFunction()==="manualSendOnEdit_")){
-    ScriptApp.newTrigger("manualSendOnEdit_").forSpreadsheet(spreadsheetId).onEdit().create();
-  }
+  sheet_();contentSheet_();contentPlanningSheet_();
+  removeAutomationTriggers_();
+  ScriptApp.newTrigger("salesAutomation_").timeBased().everyHours(2).create();
   backfillProspectControls_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME));
-  return "Sonjaya system ready | version "+CODE_VERSION;
+  return "Sonjaya sales automation ready | version "+CODE_VERSION;
 }
 
 function systemStatus(){
   return liveHealth_();
 }
 
-function hourlyAutomation_(){
-  try{scanReplies_(20);}catch(e){console.log(e);}
-  try{processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){console.log(e);}
+function salesAutomation_(){
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(1000))return json_({ok:true,skipped:true,reason:"another cycle is running"});
+  try{
+    let replies,followups,sends;
+    try{replies=scanReplies_(40);}catch(e){replies=json_({ok:false,error:String(e)});}
+    try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
+    try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
+    return json_({ok:true,replies:replies,followups:followups,sends:sends});
+  }finally{
+    try{lock.releaseLock();}catch(e){}
+  }
 }
 
+function hourlyAutomation_(){
+  // Legacy trigger compatibility: no-op. New sales cycle runs every 2 hours.
+  return;
+}
