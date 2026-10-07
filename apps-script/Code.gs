@@ -777,6 +777,7 @@ function socialHealth_(){
 
   if(out.instagram.configured){
     let lastError="";
+    const knownIgId=String(props.getProperty("IG_USER_ID")||"");
     for(let i=0;i<hosts.length;i++){
       const host=hosts[i];
       try{
@@ -784,18 +785,22 @@ function socialHealth_(){
         if(host==="https://graph.instagram.com"){
           me=instagramGetHost_(host,"/me",{fields:"id,username"});
         }else if(host==="https://graph.facebook.com"){
-          const pages=instagramGetHost_(host,"/me/accounts",{
-            fields:"id,name,instagram_business_account{id,username}"
-          });
-          const data=Array.isArray(pages&&pages.data)?pages.data:[];
-          for(let j=0;j<data.length;j++){
-            const iga=data[j]&&data[j].instagram_business_account;
-            if(iga&&iga.id){
-              me={id:iga.id,username:iga.username||"",source:"instagram_business_account",page_id:data[j].id};
-              break;
+          if(knownIgId){
+            me=instagramGetHost_(host,"/"+encodeURIComponent(knownIgId),{fields:"id,username,name"});
+          }else{
+            const pages=instagramGetHost_(host,"/me/accounts",{
+              fields:"id,name,instagram_business_account{id,username}"
+            });
+            const data=Array.isArray(pages&&pages.data)?pages.data:[];
+            for(let j=0;j<data.length;j++){
+              const iga=data[j]&&data[j].instagram_business_account;
+              if(iga&&iga.id){
+                me={id:iga.id,username:iga.username||"",source:"instagram_business_account",page_id:data[j].id};
+                break;
+              }
             }
+            if(!me)lastError="Facebook /me/accounts returned no instagram_business_account: "+JSON.stringify(pages||{}).slice(0,900);
           }
-          if(!me)lastError="Facebook /me/accounts returned no instagram_business_account: "+JSON.stringify(pages||{}).slice(0,900);
         }
         if(me&&me.id){
           out.instagram.api_ok=true;
@@ -1399,7 +1404,8 @@ function setup(){
   const props=PropertiesService.getScriptProperties();
   if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
   if(!props.getProperty("IG_API_VERSION"))props.setProperty("IG_API_VERSION","v26.0");
-  if(!props.getProperty("IG_MESSAGING_HOST"))props.setProperty("IG_MESSAGING_HOST","https://graph.instagram.com");
+  if(!props.getProperty("IG_MESSAGING_HOST"))props.setProperty("IG_MESSAGING_HOST","https://graph.facebook.com");
+  if(!props.getProperty("IG_GRAPH_HOST"))props.setProperty("IG_GRAPH_HOST","https://graph.facebook.com");
   if(!props.getProperty("IG_COMMENT_KEYWORD"))props.setProperty("IG_COMMENT_KEYWORD","REY MAU");
   if(!props.getProperty("IG_PUBLIC_COMMENT_REPLY"))props.setProperty("IG_PUBLIC_COMMENT_REPLY","Siap! 👋 Cek DM ya.");
   if(!props.getProperty("TIKTOK_COMMENT_KEYWORD"))props.setProperty("TIKTOK_COMMENT_KEYWORD","REY MAU");
