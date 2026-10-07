@@ -209,6 +209,13 @@ Return JSON only.
                 "visual_direction": "Kartu checklist dengan satu focal point.",
                 "design_notes": "Gunakan whitespace luas dan satu aksen visual."
             })
+        role_order = ["HOOK","PROBLEM","INSIGHT","FRAMEWORK","EXAMPLE","MISTAKE","CTA"]
+        normalized_slides = []
+        for i, slide in enumerate(slides):
+            item = dict(slide or {})
+            item["role"] = role_order[i]
+            normalized_slides.append(item)
+        slides = normalized_slides
         cleaned.append({
             "date": target_iso,
             "pillar": str(p.get("pillar") or CONTENT_PILLARS[offset % len(CONTENT_PILLARS)]),
@@ -221,8 +228,6 @@ Return JSON only.
             "design_style": DESIGN_STYLES[offset % len(DESIGN_STYLES)],
             "content_angle": CONTENT_ANGLES[offset % len(CONTENT_ANGLES)],
         })
-    return cleaned
-
     validate_content_plan(cleaned)
     return cleaned
 
@@ -256,7 +261,7 @@ def validate_content_plan(posts: list[dict]) -> None:
                 errors.append(f"Day {day} slide {slide_no}: missing content.")
             if not 3 <= len(title.split()) <= 14:
                 errors.append(f"Day {day} slide {slide_no}: title length out of range.")
-            if not 10 <= len(body.split()) <= 60:
+            if not 12 <= len(body.split()) <= 60:
                 errors.append(f"Day {day} slide {slide_no}: body length out of range.")
         if len(str(post.get("hook") or "").strip()) < 18:
             errors.append(f"Day {day}: hook too weak.")
