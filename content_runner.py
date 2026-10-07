@@ -192,8 +192,8 @@ Return JSON only.
             "caption": str(p.get("caption") or "Insight praktis untuk pemilik bisnis Indonesia."),
             "cta": str(p.get("cta") or "Simpan post ini dan bagikan ke tim."),
             "slides": slides,
-            "design_style": DESIGN_STYLES[offset % DESIGN_STYLES.length],
-            "content_angle": CONTENT_ANGLES[offset % CONTENT_ANGLES.length],
+            "design_style": DESIGN_STYLES[offset % len(DESIGN_STYLES)],
+            "content_angle": CONTENT_ANGLES[offset % len(CONTENT_ANGLES)],
         })
     return cleaned
 
