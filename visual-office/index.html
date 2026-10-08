@@ -90,8 +90,16 @@ carveRect(0,275,1100,100);carveRect(465,0,120,650);Object.values(rooms).forEach(
 function blockRect(x,y,w,h){for(let gz=Math.floor((y-h/2)/25);gz<=Math.floor((y+h/2)/25);gz++)for(let gx=Math.floor((x-w/2)/25);gx<=Math.floor((x+w/2)/25);gx++)if(G[gz]?.[gx]!==undefined)G[gz][gx]=false}
 Object.values(desks).forEach(d=>{blockRect(d.x,d.z,90,55);blockRect(d.seat.x,d.seat.z,45,30)});
 blockRect(530,448,110,50);blockRect(730,450,100,45);blockRect(770,405,65,45);blockRect(930,500,70,100);
-const doorCells=[[145,12],[470,12],[830,12],[195,15],[530,15],[740,15],[950,15]];
-doorCells.forEach(([gx,gz])=>{for(let dx=-1;dx<=1;dx++){if(G[gz]?.[gx+dx]!==undefined)G[gz][gx+dx]=true}});
+const doorDefs=[
+{room:rooms.sales,side:'bottom',x:145},{room:rooms.research,side:'bottom',x:470},{room:rooms.content,side:'bottom',x:830},
+{room:rooms.outreach,side:'top',x:195},{room:rooms.meeting,side:'top',x:530},{room:rooms.lounge,side:'top',x:740},{room:rooms.ops,side:'top',x:950}
+];
+function sealRoomBoundary(r,side,doorX){
+const z=Math.floor((side==='bottom'?(r.y+r.h-1):r.y)/25),gx=Math.floor(doorX/25);
+for(let x=Math.floor(r.x/25);x<Math.ceil((r.x+r.w)/25);x++)if(G[z]?.[x]!==undefined)G[z][x]=false;
+for(let dx=-1;dx<=1;dx++)if(G[z]?.[gx+dx]!==undefined)G[z][gx+dx]=true;
+}
+doorDefs.forEach(d=>sealRoomBoundary(d.room,d.side,d.x));
 function cell(x,z){return{x:Math.max(0,Math.min(43,Math.floor(x/25))),z:Math.max(0,Math.min(25,Math.floor(z/25)))}}
 function nk(n){return n.x+','+n.z}
 function neighbors(n){const a=[];for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){const x=n.x+dx,z=n.z+dz;if(G[z]?.[x])a.push({x,z})}return a}
