@@ -214,6 +214,38 @@ def enrich_candidate(url, evidence):
         time.sleep(0.15)
     return combined, "", best_url
 
+def direct_html_search(query):
+    """Fallback search using public HTML pages when DDGS providers return no results."""
+    providers = [
+        ("bing_html", "https://www.bing.com/search", {"q": query, "count": 10, "setlang": "id-id"}),
+        ("duckduckgo_html", "https://html.duckduckgo.com/html/", {"q": query}),
+    ]
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150 Safari/537.36"}
+    for backend, endpoint, params in providers:
+        try:
+            r=requests.get(endpoint, params=params, headers=headers, timeout=SEARCH_TIMEOUT, allow_redirects=True)
+            if r.status_code >= 400:
+                continue
+            soup=BeautifulSoup(r.text,"html.parser")
+            results=[]
+            if backend=="bing_html":
+                for item in soup.select("li.b_algo")[:10]:
+                    a=item.select_one("h2 a")
+                    if not a or not a.get("href"): continue
+                    sn=item.select_one(".b_caption p")
+                    results.append({"title":norm(a.get_text(" ",strip=True)),"href":a.get("href"),"body":norm(sn.get_text(" ",strip=True) if sn else "")})
+            else:
+                for item in soup.select(".result")[:10]:
+                    a=item.select_one(".result__a")
+                    if not a or not a.get("href"): continue
+                    sn=item.select_one(".result__snippet")
+                    results.append({"title":norm(a.get_text(" ",strip=True)),"href":a.get("href"),"body":norm(sn.get_text(" ",strip=True) if sn else "")})
+            if results:
+                return results, backend
+        except Exception as e:
+            print("DIRECT_SEARCH_ERROR",backend,type(e).__name__,e)
+    return [], "none"
+
 def search_with_fallback(ddgs, query):
     backends=[x.strip() for x in SEARCH_BACKENDS.split(",") if x.strip()]
     last_error=None
@@ -231,6 +263,9 @@ def search_with_fallback(ddgs, query):
         except Exception as e:
             last_error=e
             print("BACKEND_ERROR",backend,type(e).__name__,e)
+    direct_results,direct_backend=direct_html_search(query)
+    if direct_results:
+        return direct_results,direct_backend
     if last_error:
         raise last_error
     return [], "none"
