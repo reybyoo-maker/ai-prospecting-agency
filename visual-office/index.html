@@ -220,8 +220,6 @@ const changed=a.activity!==activity||a.real!==real;
 a.activity=activity;a.bubble=bubble;a.real=real;a.state=mode;a.target=new THREE.Vector3(target.x,.05,target.z);a.sitTarget=mode==='sit'?1:0;
 if(changed)updateLabel(a);
 }
-const ambientDest(a){
-};
 people.forEach(a=>a.group.position.set(homeTarget(a).x,.05,homeTarget(a).z));
 function homeTarget(a){const d=desks[a.id];if(d)return new THREE.Vector3(d.seat.x,d.seat.z,d.seat.z);const r=roomDefs[a.home];return new THREE.Vector3(r.x+r.w/2,r.y+r.h/2,0)}
 // fix owner: meeting seat
