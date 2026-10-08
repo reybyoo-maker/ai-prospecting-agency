@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonjaya AI — Virtual Office</title>
+<style>
+  :root{
+    --bg:#0b0d10;
+    --panel:#12161b;
+    --panel2:#171c22;
+    --line:#27303a;
+    --text:#e9edf2;
+    --muted:#8f9aa7;
+    --ok:#7ee787;
+    --warn:#f2cc60;
+    --danger:#ff7b72;
+    --accent:#79c0ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}
+  body{overflow:hidden}
+  .app{height:100vh;display:grid;grid-template-rows:48px 1fr}
+  header{display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--line);background:#0e1116}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.04em}
+  .brand-dot{width:10px;height:10px;border-radius:2px;background:var(--ok);box-shadow:0 0 12px rgba(126,231,135,.55);animation:blink 1.8s infinite}
+  .header-right{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:11px}
+  .live-pill{padding:5px 8px;border:1px solid var(--line);background:var(--panel);border-radius:4px;color:var(--ok)}
+  .layout{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 360px}
+  .scene-wrap{min-width:0;min-height:0;padding:14px;background:
+    radial-gradient(circle at 50% 0%,rgba(79,105,128,.10),transparent 40%),
+    #0b0d10;
+  }
+  .scene{position:relative;width:100%;height:100%;min-height:420px;border:1px solid var(--line);background:#0e1318;overflow:hidden}
+  canvas{display:block;width:100%;height:100%;image-rendering:pixelated}
+  .legend{position:absolute;left:12px;bottom:12px;display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:var(--muted);pointer-events:none}
+  .legend span{padding:4px 6px;background:rgba(10,13,17,.86);border:1px solid var(--line);border-radius:3px}
+  .side{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+  .side-head{padding:14px;border-bottom:1px solid var(--line)}
+  .side-title{font-size:12px;font-weight:800;letter-spacing:.08em}
+  .side-sub{margin-top:5px;font-size:10px;color:var(--muted);line-height:1.5}
+  .cards{padding:12px;display:grid;gap:10px;overflow:auto}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:11px}
+  .card-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .card-name{font-size:11px;font-weight:800}
+  .badge{font-size:9px;padding:3px 6px;border:1px solid var(--line);border-radius:3px;text-transform:uppercase}
+  .badge.ok{color:var(--ok)}
+  .badge.idle{color:var(--muted)}
+  .badge.warn{color:var(--warn)}
+  .meta{margin-top:8px;font-size:10px;color:var(--muted);line-height:1.55}
+  .meter{margin-top:9px;height:5px;background:#0c1014;border:1px solid #212831;overflow:hidden}
+  .meter i{display:block;height:100%;width:0;background:currentColor}
+  .oktext{color:var(--ok)}
+  .infotext{color:var(--accent)}
+  .queue{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+  .row{display:flex;justify-content:space-between;gap:12px;font-size:10px;margin:4px 0}
+  .row span:first-child{color:var(--muted)}
+  .footer{margin-top:auto;padding:10px 12px;border-top:1px solid var(--line);font-size:9px;color:var(--muted);line-height:1.5}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+  @media(max-width:900px){
+    .layout{grid-template-columns:1fr}
+    .side{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand"><span class="brand-dot"></span>SONJAYA AI / VIRTUAL OFFICE</div>
+    <div class="header-right"><span id="lastSync">syncing…</span><span class="live-pill">FREE • READ ONLY</span></div>
+  </header>
+  <main class="layout">
+    <section class="scene-wrap">
+      <div class="scene">
+        <canvas id="office"></canvas>
+        <div class="legend">
+          <span>🟢 active workflow</span>
+          <span>⚪ idle</span>
+          <span>read-only visual layer</span>
+        </div>
+      </div>
+    </section>
+    <aside class="side">
+      <div class="side-head">
+        <div class="side-title">AGENT ACTIVITY</div>
+        <div class="side-sub">Tampilan ini hanya membaca status GitHub Actions. Logic sales/content yang sekarang tetap berjalan seperti biasa.</div>
+      </div>
+      <div class="cards">
+        <div class="card" id="salesCard">
+          <div class="card-top"><div class="card-name">SALES TEAM</div><div class="badge idle" id="salesBadge">idle</div></div>
+          <div class="meta" id="salesMeta">Loading workflow…</div>
+          <div class="meter oktext"><i id="salesMeter"></i></div>
+          <div class="queue"><div class="row"><span>Discovery + scoring</span><b id="salesDiscovery">idle</b></div><div class="row"><span>Outbound stages</span><b id="salesOutbound">idle</b></div></div>
+        </div>
+
+        <div class="card" id="contentCard">
+          <div class="card-top"><div class="card-name">CONTENT STUDIO</div><div class="badge idle" id="contentBadge">idle</div></div>
+          <div class="meta" id="contentMeta">Loading workflow…</div>
+          <div class="meter infotext"><i id="contentMeter"></i></div>
+          <div class="queue"><div class="row"><span>7-day plan</span><b id="contentPlan">idle</b></div><div class="row"><span>Carousel assets</span><b id="contentAssets">idle</b></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><div class="card-name">VISUAL LAYER</div><div class="badge ok">online</div></div>
+          <div class="meta">No API key. No database. No extra paid service. Uses native Canvas + GitHub Actions public read API.</div>
+          <div class="queue"><div class="row"><span>Refresh</span><b>30s</b></div><div class="row"><span>Backend writes</span><b>none</b></div></div>
+        </div>
+      </div>
+      <div class="footer">Reference style: retro/pixel AI office. This implementation is an original visual layer, not a copy of Pixel Agents assets.</div>
+    </aside>
+  </main>
+</div>
+
+<script>
+const REPO = "reybyoo-maker/ai-prospecting-agency";
+const API = `https://api.github.com/repos/${REPO}/actions/runs?per_page=30`;
+
+const canvas = document.getElementById("office");
+const ctx = canvas.getContext("2d");
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+let W=0,H=0,t=0;
+const state = {sales:{active:false,status:"idle",updated:null},content:{active:false,status:"idle",updated:null}};
+
+function fit(){
+  const r=canvas.getBoundingClientRect();
+  W=Math.max(640,Math.floor(r.width));
+  H=Math.max(420,Math.floor(r.height));
+  canvas.width=Math.floor(W*DPR);
+  canvas.height=Math.floor(H*DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener("resize",fit);
+fit();
+
+function rect(x,y,w,h,fill,stroke){
+  ctx.fillStyle=fill; ctx.fillRect(x,y,w,h);
+  if(stroke){ctx.strokeStyle=stroke;ctx.strokeRect(x+.5,y+.5,w-1,h-1);}
+}
+function text(s,x,y,size,fill="#e9edf2",align="left"){
+  ctx.font=`bold ${size}px ui-monospace, monospace`;
+  ctx.fillStyle=fill; ctx.textAlign=align; ctx.textBaseline="middle"; ctx.fillText(s,x,y);
+}
+function room(x,y,w,h,title){
+  rect(x,y,w,h,"#151b20","#2a333d");
+  rect(x+8,y+8,w-16,h-16,"#171e24","#202831");
+  rect(x+18,y+15,w-36,22,"#0d1115","#2a333d");
+  text(title,x+29,y+26,10,"#9ba7b3");
+}
+function desk(x,y,label,accent="#7ee787"){
+  rect(x,y,104,44,"#7a5138","#b98159");
+  rect(x+8,y+7,38,25,"#20272d","#37414a");
+  rect(x+53,y+7,38,25,"#20272d","#37414a");
+  rect(x+12,y+11,30,17,"#33434e");
+  rect(x+57,y+11,30,17,"#33434e");
+  rect(x+49,y+29,8,8,"#4e3426");
+  text(label,x+6,y+54,8,accent);
+}
+function plant(x,y){
+  rect(x+6,y+16,18,15,"#9c5e3d","#bd7550");
+  rect(x,y+7,8,15,"#4d8d55"); rect(x+9,y,8,22,"#5c9b5e"); rect(x+18,y+6,8,17,"#397449");
+}
+function watercooler(x,y){
+  rect(x+4,y+11,18,24,"#b9d3dc","#d4e5ea");
+  rect(x+7,y,12,14,"#5b7a86","#88a9b5");
+  rect(x+8,y+39,10,3,"#4d5960");
+}
+function person(x,y,active,seed){
+  const bob = active ? Math.sin(t*.12+seed)*1.5 : 0;
+  y+=bob;
+  const leg="#4d5965";
+  rect(x+6,y+27,7,10,leg); rect(x+17,y+27,7,10,leg);
+  rect(x+4,y+15,22,15, active ? "#6da8d6" : "#66717a","#26313b");
+  rect(x+8,y+5,14,12,"#c58b63","#2b211b");
+  rect(x+5,y+9,20,5,"#2d2420");
+  if(active){
+    rect(x+25,y+4,5,5,"#7ee787");
+    rect(x+28,y-2,2,4,"#7ee787");
+  }
+}
+function bubble(x,y,s,active){
+  if(!active)return;
+  const bw=Math.max(100,ctx.measureText(s).width+18);
+  rect(x,y,bw,22,"#0d1115","#3b4854");
+  text(s,x+9,y+11,8,"#d7e0e8");
+}
+
+function draw(){
+  t++;
+  rect(0,0,W,H,"#0c1116");
+  const pad=28, gap=14;
+  const leftW=Math.floor(W*.68), rightX=pad+leftW+gap, rightW=W-rightX-pad;
+  const top=pad, bottom=H-pad;
+  // main office
+  room(pad,top,leftW,bottom-top,"SALES / DELIVERY FLOOR");
+  const midX=pad+Math.floor(leftW*.52);
+  rect(midX,top+8,1,bottom-top-16,"#2a333d");
+  room(midX+8,top+8,leftW-(midX-pad)-16,Math.floor((bottom-top)*.5)-14,"CONTENT STUDIO");
+  // desks
+  desk(pad+42,top+76,"DISCOVERY");
+  desk(pad+188,top+76,"ANALYZER","#79c0ff");
+  desk(pad+42,top+198,"OUTREACH");
+  desk(pad+188,top+198,"FOLLOW-UP","#f2cc60");
+  desk(midX+38,top+74,"CONTENT","#79c0ff");
+  desk(midX+158,top+74,"CAROUSEL","#79c0ff");
+  plant(midX+35,top+182); plant(midX+170,top+182); watercooler(midX+285,top+173);
+  // agents
+  person(pad+88,top+133,state.sales.active,1);
+  person(pad+234,top+133,state.sales.active,2);
+  person(pad+88,top+255,state.sales.active,3);
+  person(pad+234,top+255,state.sales.active,4);
+  person(midX+82,top+131,state.content.active,5);
+  person(midX+202,top+131,state.content.active,6);
+  // status bubbles
+  bubble(pad+44,top+45,state.sales.active?"running • discovery":"waiting",state.sales.active);
+  bubble(pad+42,top+350,state.sales.active?"queueing outbound":"idle",state.sales.active);
+  bubble(midX+40,top+45,state.content.active?"building 7-day plan":"ready",state.content.active);
+  // terminal-style panel
+  const tx=rightX, ty=top+8, tw=rightW-16, th=bottom-top-16;
+  rect(tx,ty,tw,th,"#0a0d10","#27303a");
+  rect(tx,ty,tw,26,"#11161b","#27303a");
+  text("LIVE TELEMETRY",tx+12,ty+13,9,"#8f9aa7");
+  text("SONJAYA",tx+tw-12,ty+13,8,"#79c0ff","right");
+  const lines=[
+    ["sales-engine",state.sales.active?"RUNNING":"IDLE",state.sales.active?"#7ee787":"#8f9aa7"],
+    ["content-studio",state.content.active?"RUNNING":"IDLE",state.content.active?"#79c0ff":"#8f9aa7"],
+    ["social auto-publish","DISABLED","#f2cc60"],
+    ["data writes","NONE","#8f9aa7"]
+  ];
+  let yy=ty+50;
+  lines.forEach(([a,b,c])=>{text(a,tx+12,yy,9,"#8f9aa7");text(b,tx+tw-12,yy,9,c,"right");yy+=28;});
+  rect(tx+12,yy+8,tw-24,1,"#27303a"); yy+=30;
+  text("VISUAL EVENT FEED",tx+12,yy,9,"#d7e0e8"); yy+=24;
+  const feed=[
+    state.sales.active?"Sales workflow currently executing":"Sales workflow waiting for next schedule",
+    state.content.active?"Content workflow currently executing":"Content workflow waiting for next schedule",
+    "No database or backend code is modified by this page"
+  ];
+  feed.forEach((s,i)=>{rect(tx+12,yy-6,4,4,i<2&&((i===0&&state.sales.active)||(i===1&&state.content.active))?"#7ee787":"#4b5560");text(s,tx+24,yy,8,"#aeb8c3");yy+=38;});
+  requestAnimationFrame(draw);
+}
+draw();
+
+function fmt(date){
+  if(!date) return "—";
+  return new Date(date).toLocaleString("id-ID",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"});
+}
+function setCard(prefix,run){
+  const active=run && run.status==="in_progress";
+  state[prefix].active=active;
+  state[prefix].updated=run?.updated_at || run?.created_at || null;
+  const badge=document.getElementById(prefix+"Badge");
+  const meta=document.getElementById(prefix+"Meta");
+  badge.textContent=active?"running":(run?.conclusion || "idle");
+  badge.className="badge "+(active?"ok":run?.conclusion==="failure"?"warn":"idle");
+  meta.textContent=run ? `Last: ${fmt(run.updated_at || run.created_at)} • ${run.head_branch || "main"}` : "No workflow run found.";
+  document.getElementById(prefix+"Meter").style.width=active?"100%":"0%";
+}
+async function sync(){
+  try{
+    const r=await fetch(API,{headers:{"Accept":"application/vnd.github+json"}});
+    if(!r.ok)throw new Error("GitHub API "+r.status);
+    const data=await r.json();
+    const runs=data.workflow_runs||[];
+    const latest=(name)=>runs.filter(x=>x.name===name)[0]||null;
+    setCard("sales",latest("Sonjaya 24x7 AI Sales Engine"));
+    setCard("content",latest("Sonjaya Daily Content Studio"));
+    document.getElementById("salesDiscovery").textContent=state.sales.active?"working":"idle";
+    document.getElementById("salesOutbound").textContent=state.sales.active?"working":"idle";
+    document.getElementById("contentPlan").textContent=state.content.active?"working":"ready";
+    document.getElementById("contentAssets").textContent=state.content.active?"working":"ready";
+    document.getElementById("lastSync").textContent="synced "+new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+  }catch(err){
+    document.getElementById("lastSync").textContent="offline visual";
+  }
+}
+sync();
+setInterval(sync,30000);
+</script>
+</body>
+</html>
