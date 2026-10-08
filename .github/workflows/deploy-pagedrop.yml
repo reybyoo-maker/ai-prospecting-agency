@@ -1,0 +1,58 @@
+name: Deploy Sonjaya Pixel Office to PageDrop
+
+on:
+  push:
+    branches:
+      - visual-office-free
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout visual branch
+        uses: actions/checkout@v4
+
+      - name: Deploy HTML to PageDrop
+        id: deploy
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          html = Path("visual-office/index.html").read_text(encoding="utf-8")
+          payload = {"html": html, "ogTitle": "Sonjaya AI — Pixel Office", "ogDescription": "Sonjaya AI virtual pixel office"}
+          Path("payload.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+
+          curl --fail-with-body -X POST "https://pagedrop.dev/api/v1/sites"             -H "Content-Type: application/json"             --data-binary @payload.json             | tee pagedrop-response.json
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path("pagedrop-response.json").read_text())
+          url = data["data"]["url"]
+          site_id = data["data"]["siteId"]
+          print(f"PAGE_DROP_URL={url}")
+          print(f"PAGE_DROP_SITE_ID={site_id}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"url={url}\n")
+              f.write(f"site_id={site_id}\n")
+          PY
+
+      - name: Verify deployment
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          from pathlib import Path
+          data = json.loads(Path("pagedrop-response.json").read_text())
+          url = data["data"]["url"]
+          with urllib.request.urlopen(url, timeout=30) as r:
+              body = r.read().decode("utf-8", "ignore")
+          assert "SONJAYA AI" in body, "SONJAYA AI marker missing"
+          assert '<canvas id="c"></canvas>' in body, "Pixel office canvas missing"
+          print(f"VERIFIED_URL={url}")
+          PY
