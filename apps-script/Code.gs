@@ -319,38 +319,60 @@ function doPost(e){
 function ingest_(rows){
   const sh=sheet_(), existing={};
   if(sh.getLastRow()>=2){
-    sh.getRange(2,col_("Email"),sh.getLastRow()-1,1).getValues().forEach(function(r){
-      const e=String(r[0]||"").toLowerCase().trim(); if(e)existing[e]=true;
+    sh.getRange(2,col_("Email"),sh.getLastRow()-1,1).getValues().forEach(function(r,i){
+      const e=String(r[0]||"").toLowerCase().trim(); if(e)existing[e]=i+2;
     });
   }
-  let added=0,duplicates=0,noEmail=0;
+  let added=0,duplicates=0,noEmail=0,promoted=0;
+  const handled=["SENT","FOLLOWUP_1","FOLLOWUP_2","FOLLOWUP_3","FOLLOWUP_DONE","REPLIED","WA_HANDOFF","OPTOUT"];
   rows.forEach(function(row){
     const email=String(row.recipient_email||"").toLowerCase().trim();
     if(!email||email.indexOf("@")===-1){noEmail++;return;}
-    if(existing[email]){duplicates++;return;}
+    const score=Number(row.skor||0);
+    if(existing[email]){
+      duplicates++;
+      const rowNum=existing[email];
+      const currentStatus=String(sh.getRange(rowNum,col_("Status")).getValue()||"").toUpperCase().trim();
+      if(["","REVIEW"].indexOf(currentStatus)>=0 && score>=75){
+        const setIfBlank=function(h,v){
+          if(v==null||String(v).trim()==="")return;
+          const cell=sh.getRange(rowNum,col_(h));
+          if(String(cell.getValue()||"").trim()==="")cell.setValue(v);
+        };
+        setIfBlank("Nama bisnis",row.nama_bisnis); setIfBlank("Sumber email",row.email_source_url);
+        setIfBlank("Website",row.website_url); setIfBlank("Social",row.social_url); setIfBlank("Kota",row.kota);
+        setIfBlank("Kategori",row.kategori); setIfBlank("Bukti publik",row.bukti_publik); setIfBlank("Kebutuhan terdeteksi",row.detected_need);
+        setIfBlank("Layanan direkomendasikan",row.recommended_service); setIfBlank("Pain point",row.pain_point);
+        setIfBlank("Hook personal",row.alasan); setIfBlank("Subject",row.subject); setIfBlank("Body",row.body);
+        sh.getRange(rowNum,col_("Skor")).setValue(Math.max(Number(sh.getRange(rowNum,col_("Skor")).getValue()||0),score));
+        sh.getRange(rowNum,col_("Prioritas")).setValue(score>=85?"A":"B");
+        sh.getRange(rowNum,col_("Status")).setValue("READY");
+        sh.getRange(rowNum,col_("Last Error")).clearContent();
+        sh.getRange(rowNum,col_("Attempts")).setValue(Number(sh.getRange(rowNum,col_("Attempts")).getValue()||0));
+        promoted++;
+      }
+      return;
+    }
     const o=new Array(HEADERS.length).fill("");
     const set=(h,v)=>{const c=col_(h);if(c>0)o[c-1]=v==null?"":v;};
-    const score=Number(row.skor||0);
     set("Lead ID",row.lead_id||Utilities.getUuid().replace(/-/g,"").slice(0,12));
     set("Tanggal ditemukan",row.tanggal_ditemukan||Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
     set("Nama bisnis",row.nama_bisnis); set("Email",email); set("Sumber email",row.email_source_url);
     set("Website",row.website_url); set("Social",row.social_url); set("Kota",row.kota); set("Kategori",row.kategori);
     set("Bukti publik",row.bukti_publik); set("Skor",score); set("Prioritas",score>=85?"A":score>=75?"B":"C");
     set("Kebutuhan terdeteksi",row.detected_need); set("Layanan direkomendasikan",row.recommended_service);
-    set("Pain point",row.pain_point); set("Hook personal",row.alasan);
-    set("Subject",row.subject); set("Body",row.body); set("Status",row.status||"REVIEW");
-    set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
-    set("Manual Send",false); set("Send Result","WAITING_FOR_MANUAL_SEND");
+    set("Pain point",row.pain_point); set("Hook personal",row.alasan); set("Subject",row.subject); set("Body",row.body);
+    set("Status",row.status||"REVIEW"); set("Opt Out","NO"); set("Attempts",0); set("Catatan",row.catatan);
+    set("Manual Send",false); set("Send Result","WAITING_FOR_AUTOMATIC_SEND");
     const newRow=prospectDataLastRow_(sh)+1;
     sh.getRange(newRow,1,1,HEADERS.length).setValues([o]);
     sh.getRange(newRow,col_("Manual Send"))
       .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build())
       .setValue(false);
-    existing[email]=true; added++;
+    existing[email]=newRow; added++;
   });
-  return json_({ok:true,received:rows.length,added:added,duplicates:duplicates,no_email:noEmail});
+  return json_({ok:true,received:rows.length,added:added,duplicates:duplicates,promoted:promoted,no_email:noEmail});
 }
-
 function repairProspectLayout_(){
   const sh=sheet_();
   const last=prospectDataLastRow_(sh);
