@@ -97,7 +97,7 @@
           <div class="card-top"><div class="card-name">CONTENT STUDIO</div><div class="badge idle" id="contentBadge">idle</div></div>
           <div class="meta" id="contentMeta">Loading workflow…</div>
           <div class="meter infotext"><i id="contentMeter"></i></div>
-          <div class="queue"><div class="row"><span>7-day plan</span><b id="contentPlan">idle</b></div><div class="row"><span>Carousel assets</span><b id="contentAssets">idle</b></div></div>
+          <div class="queue"><div class="row"><span>7-day plan</span><b id="contentPlan">idle</b></div><div class="row"><span>Carousel assets</span><b id="contentAssets">idle</b></div><div class="row"><span>Public URL wait</span><b id="contentWait">idle</b></div></div>
         </div>
 
         <div class="card">
@@ -113,13 +113,13 @@
 
 <script>
 const REPO = "reybyoo-maker/ai-prospecting-agency";
-const API = `https://api.github.com/repos/${REPO}/actions/runs?per_page=30`;
+const API = `https://api.github.com/repos/${REPO}/actions/runs?branch=main&per_page=30`;
 
 const canvas = document.getElementById("office");
 const ctx = canvas.getContext("2d");
 const DPR = Math.min(window.devicePixelRatio || 1, 2);
 let W=0,H=0,t=0;
-const state = {sales:{active:false,status:"idle",updated:null},content:{active:false,status:"idle",updated:null}};
+const state = {sales:{active:false,discovery:false,outbound:false,status:"idle",updated:null,jobs:null},content:{active:false,generate:false,save:false,wait:false,status:"idle",updated:null,jobs:null}};
 
 function fit(){
   const r=canvas.getBoundingClientRect();
@@ -204,16 +204,16 @@ function draw(){
   desk(midX+158,top+74,"CAROUSEL","#79c0ff");
   plant(midX+35,top+182); plant(midX+170,top+182); watercooler(midX+285,top+173);
   // agents
-  person(pad+88,top+133,state.sales.active,1);
-  person(pad+234,top+133,state.sales.active,2);
-  person(pad+88,top+255,state.sales.active,3);
-  person(pad+234,top+255,state.sales.active,4);
-  person(midX+82,top+131,state.content.active,5);
-  person(midX+202,top+131,state.content.active,6);
+  person(pad+88,top+133,state.sales.discovery,1);
+  person(pad+234,top+133,state.sales.discovery,2);
+  person(pad+88,top+255,state.sales.outbound,3);
+  person(pad+234,top+255,state.sales.outbound,4);
+  person(midX+82,top+131,state.content.generate,5);
+  person(midX+202,top+131,state.content.save||state.content.wait,6);
   // status bubbles
-  bubble(pad+44,top+45,state.sales.active?"running • discovery":"waiting",state.sales.active);
-  bubble(pad+42,top+350,state.sales.active?"queueing outbound":"idle",state.sales.active);
-  bubble(midX+40,top+45,state.content.active?"building 7-day plan":"ready",state.content.active);
+  bubble(pad+44,top+45,state.sales.discovery?"running • discovery / scoring":"waiting",state.sales.discovery);
+  bubble(pad+42,top+350,state.sales.outbound?"running • outbound stages":"idle",state.sales.outbound);
+  bubble(midX+40,top+45,state.content.generate?"running • 7-day content":state.content.save?"saving assets":state.content.wait?"waiting for public URLs":"ready",state.content.generate||state.content.save||state.content.wait);
   // terminal-style panel
   const tx=rightX, ty=top+8, tw=rightW-16, th=bottom-top-16;
   rect(tx,ty,tw,th,"#0a0d10","#27303a");
@@ -244,6 +244,16 @@ function fmt(date){
   if(!date) return "—";
   return new Date(date).toLocaleString("id-ID",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"2-digit"});
 }
+function stepBy(steps,needle){
+  return (steps||[]).find(s=>String(s.name||"").toLowerCase().includes(needle));
+}
+function stageLabel(step){
+  if(!step)return["idle","idle"];
+  if(step.status==="in_progress")return["working","ok"];
+  if(step.conclusion==="success")return["done","idle"];
+  if(step.conclusion==="failure")return["failed","warn"];
+  return["idle","idle"];
+}
 function setCard(prefix,run){
   const active=run && run.status==="in_progress";
   state[prefix].active=active;
@@ -252,29 +262,57 @@ function setCard(prefix,run){
   const meta=document.getElementById(prefix+"Meta");
   badge.textContent=active?"running":(run?.conclusion || "idle");
   badge.className="badge "+(active?"ok":run?.conclusion==="failure"?"warn":"idle");
-  meta.textContent=run ? `Last: ${fmt(run.updated_at || run.created_at)} • ${run.head_branch || "main"}` : "No workflow run found.";
+  meta.textContent=run ? `Last: ${fmt(run.updated_at || run.created_at)} • ${run.head_branch || "main"}` : "No production run found.";
   document.getElementById(prefix+"Meter").style.width=active?"100%":"0%";
+}
+async function syncJobs(prefix){
+  const run=state[prefix].run;
+  if(!run || run.status!=="in_progress"){state[prefix].jobs=null;return;}
+  try{
+    const r=await fetch(`https://api.github.com/repos/${REPO}/actions/runs/${run.id}/jobs?per_page=20&_=${Date.now()}`,{headers:{"Accept":"application/vnd.github+json","Cache-Control":"no-cache"}});
+    if(!r.ok)throw new Error(r.status);
+    const d=await r.json();
+    state[prefix].jobs=d.jobs||[];
+  }catch(e){state[prefix].jobs=null;}
+}
+function renderStages(){
+  const ss=state.sales.jobs?.[0]?.steps||[];
+  const cs=state.content.jobs?.[0]?.steps||[];
+  const d=stepBy(ss,"discover, score, and queue leads");
+  const o=stepBy(ss,"run outbound sales stages");
+  const g=stepBy(cs,"generate 7-day content plan and carousel files");
+  const a=stepBy(cs,"save content assets and manual-upload manifest");
+  const w=stepBy(cs,"wait for public github asset urls");
+  state.sales.discovery=d?.status==="in_progress"; state.sales.outbound=o?.status==="in_progress";
+  state.content.generate=g?.status==="in_progress"; state.content.save=a?.status==="in_progress"; state.content.wait=w?.status==="in_progress";
+
+  const set=(id,step,doneText="ready")=>{
+    const el=document.getElementById(id); if(!el)return;
+    const [label,cls]=stageLabel(step);
+    el.textContent=label==="working"?"working":label==="done"?doneText:label;
+    el.className=cls;
+  };
+  set("salesDiscovery",d,"done"); set("salesOutbound",o,"done");
+  set("contentPlan",g,"ready"); set("contentAssets",a,"ready"); set("contentWait",w,"done");
 }
 async function sync(){
   try{
-    const r=await fetch(API,{headers:{"Accept":"application/vnd.github+json"}});
+    const r=await fetch(API+"&_="+Date.now(),{headers:{"Accept":"application/vnd.github+json","Cache-Control":"no-cache"}});
     if(!r.ok)throw new Error("GitHub API "+r.status);
-    const data=await r.json();
-    const runs=data.workflow_runs||[];
-    const latest=(name)=>runs.filter(x=>x.name===name)[0]||null;
-    setCard("sales",latest("Sonjaya 24x7 AI Sales Engine"));
-    setCard("content",latest("Sonjaya Daily Content Studio"));
-    document.getElementById("salesDiscovery").textContent=state.sales.active?"working":"idle";
-    document.getElementById("salesOutbound").textContent=state.sales.active?"working":"idle";
-    document.getElementById("contentPlan").textContent=state.content.active?"working":"ready";
-    document.getElementById("contentAssets").textContent=state.content.active?"working":"ready";
-    document.getElementById("lastSync").textContent="synced "+new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+    const data=await r.json(),runs=data.workflow_runs||[];
+    const latest=(name)=>runs.find(x=>x.name===name && x.head_branch==="main")||null;
+    state.sales.run=latest("Sonjaya 24x7 AI Sales Engine");
+    state.content.run=latest("Sonjaya Daily Content Studio");
+    setCard("sales",state.sales.run); setCard("content",state.content.run);
+    await Promise.all(["sales","content"].map(syncJobs));
+    renderStages();
+    document.getElementById("lastSync").textContent="synced "+new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
   }catch(err){
-    document.getElementById("lastSync").textContent="offline visual";
+    document.getElementById("lastSync").textContent="GitHub API unavailable";
   }
 }
 sync();
-setInterval(sync,30000);
+setInterval(sync,45000);
 </script>
 </body>
 </html>
