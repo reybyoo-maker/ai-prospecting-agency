@@ -116,25 +116,27 @@ function roomFloor(r){floorTile(r.x+r.w/2,r.y+r.h/2,r.w,r.h,M.floor2)}
 Object.values(roomDefs).forEach(roomFloor);
 
 function wallLine(x,z,w,h,d){box(w,h,d,M.wall,x,h/2,z)}
-function roomWalls(r){
-const h=4;
-wallLine(r.x+r.w/2,r.y,r.w,.15,.3);wallLine(r.x+r.w/2,r.y+r.h,r.w,.15,.3);
-wallLine(r.x,r.y+r.h/2,.3,h,r.h);wallLine(r.x+r.w,r.y+r.h/2,.3,h,r.h);
-}
-Object.values(roomDefs).forEach(roomWalls);
-
-function doorOpening(r,side){const x=r.x+r.w/2,z=r.y+r.h/2;const w=2.4,h=2.5;
-if(side==='bottom'){box(.3,h,.3,M.wall,x, h/2,r.y+r.h-.15);box(.3,h,.3,M.wall,x, h/2,r.y+r.h+.15)}
-}
-const doors=[
-['sales','bottom',7,12],['research','bottom',18.2,12],['content','bottom',37,12],
-['outreach','top',8,17],['meeting','top',25,17],['lounge','top',36,17],['ops','top',45.5,17]
-];
-doors.forEach(([id,side,x,z])=>{
-const r=roomDefs[id];
-if(side==='bottom'){const y=r.y+r.h, len= r.w, gap=2.6, left=x-r.x-gap/2,right=r.x+r.w-x-gap/2;box(Math.max(0,left),4,.3,M.wall,r.x+left/2,y-2,left?y:y);box(Math.max(0,right),4,.3,M.wall,x+gap/2+right/2,y-2,y)}
-else{const y=r.y,x0=x,gap=2.6,left=x0-r.x-gap/2,right=r.x+r.w-x0-gap/2;box(Math.max(0,left),4,.3,M.wall,r.x+left/2,2,y);box(Math.max(0,right),4,.3,M.wall,x0+gap/2+right/2,2,y)}
-});
+const doors={
+sales:{side:'bottom',x:7},research:{side:'bottom',x:19},content:{side:'bottom',x:37},
+outreach:{side:'top',x:9},meeting:{side:'top',x:25},lounge:{side:'top',x:36},ops:{side:'top',x:45}
+};
+function segWallZ(x1,x2,z){if(x2>x1)wallLine((x1+x2)/2,z,x2-x1,4,.3)}
+function segWallX(x,z1,z2){if(z2>z1){const g=new THREE.Mesh(new THREE.BoxGeometry(.3,4,z2-z1),M.wall);g.position.set(x,2,(z1+z2)/2);g.castShadow=true;scene.add(g)}}
+function roomWallsWithDoors(r){
+const door=doors[Object.keys(roomDefs).find(k=>roomDefs[k]===r)];
+if(!door){wallLine(r.x+r.w/2,r.y,r.w,4,.3);wallLine(r.x+r.w/2,r.y+r.h,r.w,4,.3)}
+else if(door.side==='bottom'){
+const gx=door.x,gap=2.2;
+segWallZ(r.x,gx-gap/2,r.y+r.h);segWallZ(gx+gap/2,r.x+r.w,r.y+r.h);
+wallLine(r.x+r.w/2,r.y,r.w,4,.3);
+segWallX(r.x,r.y,r.y+r.h);segWallX(r.x+r.w,r.y,r.y+r.h);
+}else{
+const gx=door.x,gap=2.2;
+segWallZ(r.x,gx-gap/2,r.y);segWallZ(gx+gap/2,r.x+r.w,r.y);
+wallLine(r.x+r.w/2,r.y+r.h,r.w,4,.3);
+segWallX(r.x,r.y,r.y+r.h);segWallX(r.x+r.w,r.y,r.y+r.h);
+}}
+Object.values(roomDefs).forEach(roomWallsWithDoors);
 
 function roomLabel(r){
 const c=document.createElement('canvas');c.width=512;c.height=96;const g=c.getContext('2d');g.fillStyle='rgba(7,15,21,.88)';g.fillRect(0,0,c.width,c.height);g.strokeStyle='#466576';g.strokeRect(2,2,c.width-4,c.height-4);g.fillStyle='#eaf4f7';g.font='900 28px monospace';g.fillText(r.label,20,39);g.fillStyle='#7f98a8';g.font='20px monospace';g.fillText(r.tag,20,70);const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true}));s.scale.set(7,1.32,1);s.position.set(r.x+r.w/2,4.6,r.y+.8);scene.add(s)}
@@ -179,7 +181,7 @@ const leftArm=box(.16,.58,.18,mat(parseInt(a.c.slice(1),16)),-.48,1.15,0,g);cons
 g.userData={body:g.children[0],leftArm,rightArm,legL:l,legR:r,head:g.children[1],chair:null,label:null};scene.add(g);a.group=g;return g}
 function labelSprite(a){
 const c=document.createElement('canvas');c.width=720;c.height=96;const ctx=c.getContext('2d');ctx.clearRect(0,0,720,96);ctx.textAlign='center';ctx.font='900 22px monospace';ctx.fillStyle='#edf6f9';ctx.shadowColor='#071018';ctx.shadowBlur=5;ctx.fillText(a.name,360,34);ctx.font='16px monospace';ctx.fillStyle='#8198a7';ctx.shadowBlur=3;ctx.fillText(a.role,360,62);ctx.font='13px monospace';ctx.fillStyle='#69e5a0';ctx.fillText('● '+a.activity.toUpperCase(),360,84);const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));s.scale.set(6.4,.85,1);a.group.add(s);s.position.set(0,3.25,0);a.label=s}
-people.forEach(a=>{makeAvatar(a);labelSprite(a)});
+people.forEach(a=>{makeAvatar(a);labelSprite(a);updateLabel(a)});
 
 const grid=Array.from({length:office.H},()=>Array(office.W).fill(false));
 function carve(x1,z1,x2,z2){for(let z=z1;z<z2;z++)for(let x=x1;x<x2;x++)if(z>=0&&z<office.H&&x>=0&&x<office.W)grid[z][x]=true}
@@ -187,6 +189,11 @@ carve(0,13,50,17);carve(22,0,28,30);
 Object.values(roomDefs).forEach(r=>carve(r.x,r.y,r.x+r.w,r.y+r.h));
 function block(cx,cz,w=1,d=1){for(let z=Math.floor(cz-d/2);z<=Math.floor(cz+d/2);z++)for(let x=Math.floor(cx-w/2);x<=Math.floor(cx+w/2);x++)if(grid[z]?.[x]!==undefined)grid[z][x]=false}
 Object.values(desks).forEach(d=>{block(d.x,d.z,3,2);block(d.seat.x,d.seat.z,2,1)});block(25,20,6,3);block(34,21.5,5,2);block(38,19.4,4,2);block(38.5,22,2,2);block(45.2,25,2,2);
+Object.entries(doors).forEach(([id,door])=>{
+const r=roomDefs[id],z=door.side==='bottom'?r.y+r.h-1:r.y;
+for(let x=r.x;x<r.x+r.w;x++)grid[z][x]=false;
+const cx=Math.round(door.x);for(let dx=-1;dx<=1;dx++)if(grid[z]?.[cx+dx]!==undefined)grid[z][cx+dx]=true;
+});
 function doorCell(r){if(r.y>15)return[Math.floor(r.x+r.w/2),r.y];return[Math.floor(r.x+r.w/2),r.y+r.h-1]}
 function nearestWalkable(x,z){let bx=Math.floor(x),bz=Math.floor(z);for(let rad=0;rad<8;rad++)for(let dz=-rad;dz<=rad;dz++)for(let dx=-rad;dx<=rad;dx++){const gx=bx+dx,gz=bz+dz;if(grid[gz]?.[gx])return{x:gx+.5,z:gz+.5}}return{x:Math.floor(x)+.5,z:Math.floor(z)+.5}}
 function neighbors(n){const out=[];for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){const x=n.x+dx,z=n.z+dz;if(grid[z]?.[x])out.push({x,z})}return out}
@@ -197,8 +204,21 @@ while(open.length){open.sort((a,b)=>(f.get(key(a))||1e9)-(f.get(key(b))||1e9));c
 for(const n of neighbors(cur)){const nk=key(n),tent=(g.get(key(cur))||1e9)+1;if(tent<(g.get(nk)||1e9)){came.set(nk,cur);g.set(nk,tent);f.set(nk,tent+Math.abs(n.x-e.x)+Math.abs(n.z-e.z));if(!open.some(o=>key(o)===nk))open.push(n)}}}
 return[new THREE.Vector3(s.x,.05,s.z)]
 }
+function updateLabel(a){
+if(!a.label)return;
+const c=document.createElement('canvas');c.width=720;c.height=96;
+const ctx=c.getContext('2d');ctx.clearRect(0,0,720,96);ctx.textAlign='center';
+ctx.font='900 22px monospace';ctx.fillStyle='#edf6f9';ctx.shadowColor='#071018';ctx.shadowBlur=5;ctx.fillText(a.name,360,30);
+ctx.font='16px monospace';ctx.fillStyle='#8198a7';ctx.shadowBlur=3;ctx.fillText(a.role,360,56);
+ctx.font='13px monospace';ctx.fillStyle=a.real?'#69e5a0':'#7a91a0';ctx.fillText((a.real?'● LIVE · ':'○ ')+a.activity.toUpperCase(),360,82);
+const old=a.label.material.map;const tex=new THREE.CanvasTexture(c);a.label.material.map=tex;a.label.material.needsUpdate=true;if(old)old.dispose();
+}
 function plan(a,target,activity,bubble,real,mode='walk'){
-const p=astar({x:a.group.position.x,z:a.group.position.z},{x:target.x,z:target.z});a.path=p;a.pathIndex=0;a.activity=activity;a.bubble=bubble;a.real=real;a.state=mode;a.target=new THREE.Vector3(target.x,.05,target.z);a.sitTarget=mode==='sit'?1:0
+const p=astar({x:a.group.position.x,z:a.group.position.z},{x:target.x,z:target.z});
+a.path=p;a.pathIndex=0;
+const changed=a.activity!==activity||a.real!==real;
+a.activity=activity;a.bubble=bubble;a.real=real;a.state=mode;a.target=new THREE.Vector3(target.x,.05,target.z);a.sitTarget=mode==='sit'?1:0;
+if(changed)updateLabel(a);
 }
 const ambientDest(a){
 };
@@ -234,7 +254,10 @@ function activeStep(jobs,needle){return(jobs||[]).some(s=>String(s.name||'').toL
 function updateAgents(dt){
 people.forEach(a=>{
 const real=realFor(a);
-if(real){const p=real.target;const changed=!a.real||a.activity!==real.activity||!a.path.length;plan(a,p,real.activity,real.bubble,true,'walk')}
+if(real){
+const needsPlan=!a.real||a.activity!==real.activity||a.pathIndex>=a.path.length&&a.state!=='sitting';
+if(needsPlan)plan(a,real.target,real.activity,real.bubble,true,'walk');
+}
 else if(a.real){a.real=false;workPlan(a,false,'returning to workstation','return');a.nextAmbient=Date.now()+5000}
 else if(Date.now()>=a.nextAmbient||!a.path.length)ambientPlan(a);
 if(a.path.length&&a.pathIndex<a.path.length){
