@@ -59,7 +59,7 @@ jobs:
           except Exception as exc:
               print("APPS_SCRIPT_VERSION_CHECK_FAILED", repr(exc))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("ready=" + ("true" if ready else "false") + "\\n")
+              output.write("ready=" + ("true" if ready else "false") + "\n")
           PY
       - name: Run outbound sales stages
         if: steps.appscript_version.outputs.ready == 'true'
