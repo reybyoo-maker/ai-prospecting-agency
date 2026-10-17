@@ -24,7 +24,7 @@ GitHub Actions menjalankan satu sales cycle setiap 2 jam:
 1. discovery + scoring + queueing lead baru,
 2. scan reply terbaru,
 3. proses follow-up yang sudah jatuh tempo,
-4. kirim sampai **30 initial email READY** dengan prioritas skor tertinggi.
+4. proses follow-up yang sudah jatuh tempo terlebih dahulu, lalu gunakan sisa kuota harian untuk email awal READY (prioritas skor tertinggi); gabungan email awal dan follow-up otomatis dibatasi **maksimal 20 pesan per hari WIB**.
 
 Setelah initial email berhasil:
 `SENT -> FOLLOWUP_1 (+2 hari) -> FOLLOWUP_2 (+5 hari) -> FOLLOWUP_3 (+9 hari) -> FOLLOWUP_DONE`
@@ -33,13 +33,15 @@ Jika prospek membalas, follow-up berhenti. Jika mereka mengirim `UNSUBSCRIBE`, s
 
 Semua pengiriman menggunakan lock, retry/error state, Lead ID, dan subject tag `[SJ-xxxxxxxxxxxx]` agar thread dapat dilacak.
 
-### Important email limit
-Target operasional adalah 30 initial email setiap 2 jam. Actual send tetap dibatasi kuota akun Google. Apps Script menyediakan `MailApp.getRemainingDailyQuota()`, dan quota resmi saat ini adalah 100 recipient/hari untuk akun konsumen dan 1.500 recipient/hari untuk Google Workspace; batas tersebut dapat berubah.
+### Daily automated email limit
+- Batas keras sistem adalah **maksimal 20 email outreach otomatis per hari kalender WIB**, gabungan email awal dan follow-up terjadwal.
+- Batas dihitung lintas pemanggilan workflow dengan counter harian di Apps Script Properties dan riwayat pengiriman pada Google Sheets; menjalankan workflow beberapa kali tidak mengatur ulang batas.
+- Follow-up yang sudah jatuh tempo diprioritaskan, kemudian email awal menggunakan sisa kuota harian.
+- Balasan otomatis terhadap prospek yang lebih dulu membalas tetap berjalan agar respons masuk tidak sengaja tertunda oleh batas outreach.
+- Email awal dan follow-up juga tunduk pada kuota akun Google melalui `MailApp.getRemainingDailyQuota()`; sistem memakai batas yang lebih rendah antara kuota Google dan batas internal 20 email per hari.
 
-Artinya:
-- akun konsumen tidak mungkin mengirim 30 x 12 = 360 recipient/hari;
-- Google Workspace dapat mendukung target 360/hari selama quota dan kebijakan akun mencukupi;
-- sistem selalu menghormati quota yang tersisa, bukan memaksa melewatinya.
+### Main service offer
+Layanan utama yang ditawarkan melalui email prospek adalah **otomasi workflow menggunakan n8n yang dirancang berjalan 24/7** sesuai kebutuhan dan konfigurasi operasional bisnis. Email awal dan follow-up mengarahkan penerima ke portofolio: https://agencyai.reybyoo.workers.dev/
 
 ## FLOW 2 — CONTENT STUDIO
 
