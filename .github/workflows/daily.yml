@@ -66,9 +66,10 @@ jobs:
               print("OPTIONAL_STAGE_FAILED", action, repr(last))
               return {"ok": False, "error": str(last)}
 
-          # Prioritise due follow-ups, then use any remaining daily allowance for new outreach.
+          # One shared daily cap covers AI replies, due follow-ups, and new outreach.
+          # Handle replies first, then follow-ups, then new prospect emails.
+          post("scan_replies", limit=10, timeout=180, required=False)
           post("process_followups", limit=20, timeout=180, required=True)
           send = post("send_queue", limit=20, timeout=180, required=True)
-          post("scan_replies", limit=10, timeout=120, required=False)
           print("SALES_STAGES_OK", {"send": send})
           PY
