@@ -2,7 +2,7 @@ from __future__ import annotations
 import os, sys, requests
 from google import genai
 
-EXPECTED_APPS_SCRIPT_VERSION = os.getenv("EXPECTED_APPS_SCRIPT_VERSION", "2026-10-08.2")
+EXPECTED_APPS_SCRIPT_VERSION = os.getenv("EXPECTED_APPS_SCRIPT_VERSION", "2026-10-17.1")
 
 def need(name):
     value=os.getenv(name,"").strip()
