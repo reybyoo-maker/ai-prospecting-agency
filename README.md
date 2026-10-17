@@ -39,6 +39,8 @@ Semua pengiriman menggunakan lock, retry/error state, Lead ID, dan subject tag `
 - Prioritas pengiriman: balasan prospek yang sudah masuk, kemudian follow-up yang jatuh tempo, lalu email awal ke prospek baru.
 - Sistem tetap memindai email masuk untuk memproses permintaan `UNSUBSCRIBE`, meskipun kuota pengiriman otomatis hari itu telah habis.
 - Semua jenis email otomatis tunduk pada kuota akun Google melalui `MailApp.getRemainingDailyQuota()`; sistem memakai batas yang lebih rendah antara kuota Google dan batas internal 20 email per hari.
+- Sebelum mengirim, GitHub Actions memeriksa bahwa Apps Script live sudah menggunakan versi `2026-10-17.2`. Jika belum, tahap pengiriman otomatis dilewati agar versi lama tidak mengirim melebihi batas; lead tetap dapat ditemukan dan dimasukkan ke antrean.
+- Agar pengiriman aktif kembali, salin `apps-script/Code.gs` versi terbaru ke Google Apps Script lalu simpan dan perbarui deployment Web App. Setelah endpoint mengembalikan versi `2026-10-17.2`, workflow berikutnya akan melanjutkan pengiriman.
 
 ### Main service offer
 Layanan utama yang ditawarkan melalui email prospek adalah **otomasi workflow menggunakan n8n yang dirancang berjalan 24/7** sesuai kebutuhan dan konfigurasi operasional bisnis. Email awal dan follow-up mengarahkan penerima ke portofolio: https://agencyai.reybyoo.workers.dev/
