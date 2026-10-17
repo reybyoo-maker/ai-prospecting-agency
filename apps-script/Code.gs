@@ -3,10 +3,13 @@ const CONTENT_SHEET = "Content";
 const CONTENT_PLAN_SHEET = "Content Planning";
 const MAX_ATTEMPTS = 3;
 const DAILY_SEND_LIMIT = 20;
-const MAX_FOLLOWUPS_PER_RUN = 10;
-const BATCH_SEND_LIMIT = 30;
-const MAX_DAILY_AUTOMATED_SENDS = 360;
+const MAX_FOLLOWUPS_PER_RUN = 20;
+const BATCH_SEND_LIMIT = DAILY_SEND_LIMIT;
+const MAX_DAILY_AUTOMATED_SENDS = DAILY_SEND_LIMIT;
 const AGENCY_NAME = "Sonjaya Remote Business Services";
+const PORTFOLIO_URL = "https://agencyai.reybyoo.workers.dev/";
+const AUTOMATION_OFFER = "Saya menawarkan jasa pembuatan otomasi workflow menggunakan n8n yang dirancang berjalan 24/7 sesuai kebutuhan operasional bisnis.";
+const AUTO_DAILY_COUNTER_PROPERTY = "AUTO_OUTBOUND_DAILY_COUNTER";
 const MANUAL_SEND_COL = "Manual Send";
 const SEND_RESULT_COL = "Send Result";
 const CONTENT_HEADERS = ["Tanggal","Platform","Format","Topik","Hook","Caption","CTA","Visual Prompt","Asset URL","Status","Publish Result"];
@@ -14,7 +17,7 @@ const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Ho
 const AUTOMATION_LOG_SHEET = "Automation Log";
 const AUTOMATION_LOG_HEADERS = ["Tanggal","Cycle","Initial Sent","Follow-ups Sent","Replies Processed","Errors","Quota Before","Quota After","Status","Detail"];
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-08.1";
+const CODE_VERSION = "2026-10-17.1";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -176,6 +179,67 @@ function auth_(body){
 }
 function ownerEmail_(){return String(Session.getEffectiveUser().getEmail()||"").toLowerCase();}
 
+function portfolioOfferBody_(body){
+  let result=String(body||"").trim();
+  if(!/\bn8n\b/i.test(result)||!/24\s*\/\s*7/i.test(result)){
+    result+=(result?"\n\n":"")+AUTOMATION_OFFER;
+  }
+  if(result.indexOf(PORTFOLIO_URL)===-1){
+    result+=(result?"\n\n":"")+"Silakan cek portofolio saya di: "+PORTFOLIO_URL;
+  }
+  return result.trim();
+}
+
+function isTodayWib_(value,today){
+  if(value===null||value===undefined||value==="")return false;
+  if(value instanceof Date && !isNaN(value.getTime())){
+    return Utilities.formatDate(value,"Asia/Jakarta","yyyy-MM-dd")===today;
+  }
+  const raw=String(value).trim();
+  if(raw.indexOf(today)===0)return true;
+  const parsed=new Date(raw);
+  return !isNaN(parsed.getTime())&&Utilities.formatDate(parsed,"Asia/Jakarta","yyyy-MM-dd")===today;
+}
+
+function historicalAutomatedSendsToday_(){
+  const today=Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd");
+  const sh=SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if(!sh||sh.getLastRow()<2)return 0;
+  const values=sh.getRange(2,1,sh.getLastRow()-1,HEADERS.length).getValues();
+  const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
+  let count=0;
+  values.forEach(function(r){
+    const result=String(r[idx[SEND_RESULT_COL]]||"");
+    const hit=result.match(/^AUTO_(?:SENT|FOLLOWUP_[123])\s+(\d{4}-\d{2}-\d{2})/i);
+    if(hit&&hit[1]===today){count++;return;}
+    const status=String(r[idx["Status"]]||"").toUpperCase().trim();
+    let sentFields=[];
+    if(status==="FOLLOWUP_1")sentFields=["Follow-up 1 At"];
+    else if(status==="FOLLOWUP_2")sentFields=["Follow-up 1 At","Follow-up 2 At"];
+    else if(status==="FOLLOWUP_3"||status==="FOLLOWUP_DONE")sentFields=["Follow-up 1 At","Follow-up 2 At","Follow-up 3 At"];
+    sentFields.forEach(function(h){if(isTodayWib_(r[idx[h]],today))count++;});
+  });
+  return count;
+}
+
+function automatedSendsToday_(){
+  const today=Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd");
+  let stored=0;
+  try{
+    const state=JSON.parse(PropertiesService.getScriptProperties().getProperty(AUTO_DAILY_COUNTER_PROPERTY)||"{}");
+    if(state.date===today)stored=Math.max(0,Number(state.count)||0);
+  }catch(e){}
+  return Math.max(stored,historicalAutomatedSendsToday_());
+}
+
+function storeAutomatedSendsToday_(count){
+  const today=Utilities.formatDate(now_(),"Asia/Jakarta","yyyy-MM-dd");
+  PropertiesService.getScriptProperties().setProperty(
+    AUTO_DAILY_COUNTER_PROPERTY,
+    JSON.stringify({date:today,count:Math.max(0,Number(count)||0)})
+  );
+}
+
 function onOpen(){
   SpreadsheetApp.getUi().createMenu("Sonjaya")
     .addItem("Status Sistem","systemStatus")
@@ -216,7 +280,7 @@ function sendOneRow_(rowNum){
     if(rowNum<2||rowNum>sh.getLastRow())return {ok:false,error:"Invalid row"};
     const email=String(sh.getRange(rowNum,col_("Email")).getValue()||"").trim();
     const subject=String(sh.getRange(rowNum,col_("Subject")).getValue()||"").trim();
-    const body=String(sh.getRange(rowNum,col_("Body")).getValue()||"").trim();
+    const body=portfolioOfferBody_(String(sh.getRange(rowNum,col_("Body")).getValue()||"").trim());
     const opt=String(sh.getRange(rowNum,col_("Opt Out")).getValue()||"").toUpperCase().trim();
     const status=String(sh.getRange(rowNum,col_("Status")).getValue()||"").toUpperCase().trim();
     if(opt==="YES")throw new Error("OPT_OUT");
@@ -228,6 +292,7 @@ function sendOneRow_(rowNum){
     const taggedSubject="[SJ-"+String(sh.getRange(rowNum,col_("Lead ID")).getValue()||"")+"] "+subject;
     MailApp.sendEmail({to:email,subject:taggedSubject,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
     sh.getRange(rowNum,col_("Subject")).setValue(taggedSubject);
+    sh.getRange(rowNum,col_("Body")).setValue(body);
     const first=now_();
     sh.getRange(rowNum,col_("Status")).setValue("SENT");
     scheduleAfterManualSend_(rowNum,first);
@@ -286,7 +351,7 @@ function liveHealth_(){
       wa_number:Boolean(props.getProperty("WA_NUMBER")),
       gemini_api_key:Boolean(props.getProperty("GEMINI_API_KEY"))
     },
-    email:{remaining_daily_quota:quota,batch_target:BATCH_SEND_LIMIT,max_daily_target:MAX_DAILY_AUTOMATED_SENDS},
+    email:{remaining_daily_quota:quota,batch_target:BATCH_SEND_LIMIT,max_daily_target:DAILY_SEND_LIMIT,automated_sent_today:automatedSendsToday_()},
     triggers:{
       githubSalesScheduler:true,
       legacyHourly:handlers.indexOf("hourlyAutomation_")>=0,
@@ -420,7 +485,7 @@ function outboundToday_(values,idx){
 function autoSendBatch_(limit){
   const sh=sheet_(),last=sh.getLastRow();
   const quota=Math.max(0,MailApp.getRemainingDailyQuota());
-  if(last<2)return json_({ok:true,sent:0,errors:0,candidates:0,quota_before:quota,quota_after:quota});
+  if(last<2)return json_({ok:true,sent:0,errors:0,candidates:0,quota_before:quota,quota_after:quota,daily_limit:DAILY_SEND_LIMIT});
   const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
   const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
   const candidates=[];
@@ -436,24 +501,34 @@ function autoSendBatch_(limit){
     candidates.push({row:i+2,score:Number(r[idx["Skor"]]||0)});
   }
   candidates.sort(function(x,y){return y.score-x.score;});
-  const maxToSend=Math.min(BATCH_SEND_LIMIT,Math.max(1,Number(limit||BATCH_SEND_LIMIT)),quota);
   const lock=LockService.getDocumentLock();
   lock.waitLock(20000);
-  let sent=0,errors=0;
+  let sent=0,errors=0,dailySent=0,maxToSend=0;
   try{
+    dailySent=automatedSendsToday_();
+    maxToSend=Math.min(
+      BATCH_SEND_LIMIT,
+      Math.max(0,Number(limit||BATCH_SEND_LIMIT)),
+      quota,
+      Math.max(0,DAILY_SEND_LIMIT-dailySent)
+    );
     for(let i=0;i<candidates.length&&sent<maxToSend;i++){
       const rowNum=candidates[i].row;
       const status=String(sh.getRange(rowNum,col_("Status")).getValue()||"").toUpperCase().trim();
       if(status!=="READY")continue;
       const email=String(sh.getRange(rowNum,col_("Email")).getValue()||"").trim();
       const subject=String(sh.getRange(rowNum,col_("Subject")).getValue()||"").trim();
-      const body=String(sh.getRange(rowNum,col_("Body")).getValue()||"").trim();
+      const rawBody=String(sh.getRange(rowNum,col_("Body")).getValue()||"").trim();
+      const body=portfolioOfferBody_(rawBody);
       const leadId=String(sh.getRange(rowNum,col_("Lead ID")).getValue()||"");
       if(!email||!subject||!body||!leadId)continue;
       try{
         const tagged=/^\[SJ-[a-f0-9]{12}\]/i.test(subject)?subject:"[SJ-"+leadId+"] "+subject;
         MailApp.sendEmail({to:email,subject:tagged,body:body,name:AGENCY_NAME,replyTo:ownerEmail_()});
+        dailySent++;
+        storeAutomatedSendsToday_(dailySent);
         sh.getRange(rowNum,col_("Subject")).setValue(tagged);
+        sh.getRange(rowNum,col_("Body")).setValue(body);
         const first=now_();
         sh.getRange(rowNum,col_("Status")).setValue("SENT");
         scheduleAfterManualSend_(rowNum,first);
@@ -470,7 +545,12 @@ function autoSendBatch_(limit){
   }finally{
     try{lock.releaseLock();}catch(e){}
   }
-  return json_({ok:true,requested:BATCH_SEND_LIMIT,candidates:candidates.length,sent:sent,errors:errors,quota_before:quota,quota_after:Math.max(0,MailApp.getRemainingDailyQuota())});
+  return json_({
+    ok:true,requested:Number(limit||BATCH_SEND_LIMIT),batch_limit:BATCH_SEND_LIMIT,daily_limit:DAILY_SEND_LIMIT,
+    candidates:candidates.length,sent:sent,errors:errors,daily_sent:dailySent,
+    daily_remaining:Math.max(0,DAILY_SEND_LIMIT-dailySent),quota_before:quota,
+    quota_after:Math.max(0,MailApp.getRemainingDailyQuota())
+  });
 }
 
 function sendQueue_(limit){
@@ -505,58 +585,70 @@ function sendFollowupMessage_(leadId,email,subject,body){
 }
 
 function followupBody_(business,service,pain,stage){
-  const serviceText=service||"pekerjaan remote";
+  const serviceText="otomasi workflow menggunakan n8n yang dirancang berjalan 24/7";
   if(stage===1){
-    return "Halo tim "+business+",\n\nSaya follow up singkat soal email saya sebelumnya. Saya melihat ada peluang terkait "+serviceText+(pain?" — khususnya "+pain+".":".")+"\n\nKalau ini memang sedang dibutuhkan, saya bisa kirim contoh alur kerja yang sederhana dan bisa dikerjakan remote.\n\nSalam,\nRey\n"+AGENCY_NAME;
+    return portfolioOfferBody_("Halo tim "+business+",\n\nSaya follow up singkat soal email saya sebelumnya. Saya menawarkan "+serviceText+(pain?" yang bisa disesuaikan dengan kebutuhan operasional terkait.":" untuk membantu proses kerja yang berulang.")+"\n\nJika relevan, silakan cek portofolio saya dan balas email ini agar kita bisa membahas kebutuhan Anda.\n\nSalam,\nRey\n"+AGENCY_NAME);
   }
   if(stage===2){
-    return "Halo tim "+business+",\n\nSaya ingin memastikan email sebelumnya tidak terlewat. Untuk "+business+", saya mengusulkan bantuan remote di area "+serviceText+". Tidak perlu komitmen panjang; kita bisa mulai dari tugas yang paling mendesak.\n\nKalau relevan, cukup balas email ini dan saya kirim detailnya.\n\nSalam,\nRey\n"+AGENCY_NAME;
+    return portfolioOfferBody_("Halo tim "+business+",\n\nSaya ingin memastikan email sebelumnya tidak terlewat. Layanan saya berfokus pada "+serviceText+" sesuai kebutuhan bisnis.\n\nSilakan cek portofolio saya. Jika ada proses berulang yang ingin diotomatisasi, cukup balas email ini dan saya kirim detail awalnya.\n\nSalam,\nRey\n"+AGENCY_NAME);
   }
-  return "Halo tim "+business+",\n\nIni follow up terakhir saya terkait bantuan remote "+serviceText+". Saya tidak akan mengirim follow up lagi setelah ini. Kalau kebutuhan tersebut muncul di kemudian hari, cukup balas email ini.\n\nTerima kasih,\nRey\n"+AGENCY_NAME;
+  return portfolioOfferBody_("Halo tim "+business+",\n\nIni follow-up terakhir saya mengenai "+serviceText+". Saya tidak akan mengirim follow-up lagi setelah ini. Bila otomasi seperti ini relevan di kemudian hari, silakan cek portofolio saya atau balas email ini.\n\nTerima kasih,\nRey\n"+AGENCY_NAME);
 }
 
 function processFollowups_(limit){
-  const sh=sheet_(),last=sh.getLastRow();
-  if(last<2)return json_({ok:true,processed:0});
-  const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
-  const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
-  const sentToday=outboundToday_(values,idx);
-  let remaining=Math.max(0,MailApp.getRemainingDailyQuota());
-  const now=now_(); let processed=0;
-  const maxItems=Math.min(Math.max(1,limit||MAX_FOLLOWUPS_PER_RUN),remaining);
-  for(let i=0;i<values.length&&processed<maxItems;i++){
-    const r=values[i];
-    const status=String(r[idx["Status"]]||"").toUpperCase().trim();
-    const opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
-    if(opt==="YES"||["READY","REPLIED","WA_HANDOFF","OPTOUT","ERROR","FAILED","FOLLOWUP_DONE"].indexOf(status)>=0)continue;
+  const lock=LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try{
+    const sh=sheet_(),last=sh.getLastRow();
+    if(last<2)return json_({ok:true,processed:0,daily_limit:DAILY_SEND_LIMIT});
+    const values=sh.getRange(2,1,last-1,HEADERS.length).getValues();
+    const idx={}; HEADERS.forEach(function(h,i){idx[h]=i;});
+    let remaining=Math.max(0,MailApp.getRemainingDailyQuota());
+    let dailySent=automatedSendsToday_();
+    const now=now_(); let processed=0;
+    const maxItems=Math.min(
+      Math.max(0,Number(limit||MAX_FOLLOWUPS_PER_RUN)),
+      remaining,
+      Math.max(0,DAILY_SEND_LIMIT-dailySent)
+    );
+    for(let i=0;i<values.length&&processed<maxItems;i++){
+      const r=values[i];
+      const status=String(r[idx["Status"]]||"").toUpperCase().trim();
+      const opt=String(r[idx["Opt Out"]]||"").toUpperCase().trim();
+      if(opt==="YES"||["READY","REPLIED","WA_HANDOFF","OPTOUT","ERROR","FAILED","FOLLOWUP_DONE"].indexOf(status)>=0)continue;
 
-    let stage=0,due=null,nextStatus="",timeCol="";
-    if(status==="SENT"){stage=1;due=r[idx["Follow-up 1 At"]];nextStatus="FOLLOWUP_1";timeCol="Follow-up 1 At";}
-    else if(status==="FOLLOWUP_1"){stage=2;due=r[idx["Follow-up 2 At"]];nextStatus="FOLLOWUP_2";timeCol="Follow-up 2 At";}
-    else if(status==="FOLLOWUP_2"){stage=3;due=r[idx["Follow-up 3 At"]];nextStatus="FOLLOWUP_3";timeCol="Follow-up 3 At";}
-    else continue;
+      let stage=0,due=null,nextStatus="",timeCol="";
+      if(status==="SENT"){stage=1;due=r[idx["Follow-up 1 At"]];nextStatus="FOLLOWUP_1";timeCol="Follow-up 1 At";}
+      else if(status==="FOLLOWUP_1"){stage=2;due=r[idx["Follow-up 2 At"]];nextStatus="FOLLOWUP_2";timeCol="Follow-up 2 At";}
+      else if(status==="FOLLOWUP_2"){stage=3;due=r[idx["Follow-up 3 At"]];nextStatus="FOLLOWUP_3";timeCol="Follow-up 3 At";}
+      else continue;
 
-    if(!(due instanceof Date)){due=new Date(String(due||""));} 
-    if(isNaN(due.getTime())||due.getTime()>now.getTime())continue;
+      if(!(due instanceof Date)){due=new Date(String(due||""));}
+      if(isNaN(due.getTime())||due.getTime()>now.getTime())continue;
 
-    const leadId=String(r[idx["Lead ID"]]||""),email=String(r[idx["Email"]]||"").trim(),subject=String(r[idx["Subject"]]||"").trim();
-    if(!leadId||!email||!subject)continue;
-    const business=String(r[idx["Nama bisnis"]]||"Perusahaan");
-    const service=String(r[idx["Layanan direkomendasikan"]]||"pekerjaan remote");
-    const pain=String(r[idx["Pain point"]]||"");
-    const body=followupBody_(business,service,pain,stage);
-    try{
-      sendFollowupMessage_(leadId,email,subject,body);
-      const rowNum=i+2;
-      sh.getRange(rowNum,col_("Status")).setValue(stage===3?"FOLLOWUP_DONE":nextStatus);
-      sh.getRange(rowNum,col_(timeCol)).setValue(now);
-      sh.getRange(rowNum,col_("Last Error")).clearContent();
-      processed++; remaining--;
-    }catch(err){
-      markError_(leadId,String(err));
+      const leadId=String(r[idx["Lead ID"]]||""),email=String(r[idx["Email"]]||"").trim(),subject=String(r[idx["Subject"]]||"").trim();
+      if(!leadId||!email||!subject)continue;
+      const business=String(r[idx["Nama bisnis"]]||"Perusahaan");
+      const pain=String(r[idx["Pain point"]]||"");
+      const body=followupBody_(business,"n8n_automation_24_7",pain,stage);
+      try{
+        sendFollowupMessage_(leadId,email,subject,body);
+        dailySent++;
+        storeAutomatedSendsToday_(dailySent);
+        const rowNum=i+2;
+        sh.getRange(rowNum,col_("Status")).setValue(stage===3?"FOLLOWUP_DONE":nextStatus);
+        sh.getRange(rowNum,col_(timeCol)).setValue(now);
+        sh.getRange(rowNum,col_(SEND_RESULT_COL)).setValue("AUTO_FOLLOWUP_"+stage+" "+Utilities.formatDate(now,"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
+        sh.getRange(rowNum,col_("Last Error")).clearContent();
+        processed++; remaining--;
+      }catch(err){
+        markError_(leadId,String(err));
+      }
     }
+    return json_({ok:true,processed:processed,daily_limit:DAILY_SEND_LIMIT,daily_sent:dailySent,daily_remaining:Math.max(0,DAILY_SEND_LIMIT-dailySent),remaining_quota:remaining});
+  }finally{
+    try{lock.releaseLock();}catch(e){}
   }
-  return json_({ok:true,processed:processed,sent_today:sentToday+processed,remaining:remaining});
 }
 
 function geminiReply_(business,service,pain,originalSubject,originalBody,inboundBody,waNumber){
