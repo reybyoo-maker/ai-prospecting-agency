@@ -34,11 +34,11 @@ Jika prospek membalas, follow-up berhenti. Jika mereka mengirim `UNSUBSCRIBE`, s
 Semua pengiriman menggunakan lock, retry/error state, Lead ID, dan subject tag `[SJ-xxxxxxxxxxxx]` agar thread dapat dilacak.
 
 ### Daily automated email limit
-- Batas keras sistem adalah **maksimal 20 email outreach otomatis per hari kalender WIB**, gabungan email awal dan follow-up terjadwal.
-- Batas dihitung lintas pemanggilan workflow dengan counter harian di Apps Script Properties dan riwayat pengiriman pada Google Sheets; menjalankan workflow beberapa kali tidak mengatur ulang batas.
-- Follow-up yang sudah jatuh tempo diprioritaskan, kemudian email awal menggunakan sisa kuota harian.
-- Balasan otomatis terhadap prospek yang lebih dulu membalas tetap berjalan agar respons masuk tidak sengaja tertunda oleh batas outreach.
-- Email awal dan follow-up juga tunduk pada kuota akun Google melalui `MailApp.getRemainingDailyQuota()`; sistem memakai batas yang lebih rendah antara kuota Google dan batas internal 20 email per hari.
+- Batas keras sistem adalah **maksimal 20 email otomatis per hari kalender WIB**, mencakup balasan AI kepada prospek, follow-up terjadwal, dan email awal.
+- Batas yang sama dihitung lintas workflow menggunakan counter harian di Apps Script Properties; menjalankan workflow berulang kali tidak mengatur ulang batas.
+- Prioritas pengiriman: balasan prospek yang sudah masuk, kemudian follow-up yang jatuh tempo, lalu email awal ke prospek baru.
+- Sistem tetap memindai email masuk untuk memproses permintaan `UNSUBSCRIBE`, meskipun kuota pengiriman otomatis hari itu telah habis.
+- Semua jenis email otomatis tunduk pada kuota akun Google melalui `MailApp.getRemainingDailyQuota()`; sistem memakai batas yang lebih rendah antara kuota Google dan batas internal 20 email per hari.
 
 ### Main service offer
 Layanan utama yang ditawarkan melalui email prospek adalah **otomasi workflow menggunakan n8n yang dirancang berjalan 24/7** sesuai kebutuhan dan konfigurasi operasional bisnis. Email awal dan follow-up mengarahkan penerima ke portofolio: https://agencyai.reybyoo.workers.dev/
