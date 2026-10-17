@@ -17,7 +17,7 @@ const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Ho
 const AUTOMATION_LOG_SHEET = "Automation Log";
 const AUTOMATION_LOG_HEADERS = ["Tanggal","Cycle","Initial Sent","Follow-ups Sent","Replies Processed","Errors","Quota Before","Quota After","Status","Detail"];
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-17.1";
+const CODE_VERSION = "2026-10-17.2";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -210,13 +210,14 @@ function historicalAutomatedSendsToday_(){
   let count=0;
   values.forEach(function(r){
     const result=String(r[idx[SEND_RESULT_COL]]||"");
-    const hit=result.match(/^AUTO_(?:SENT|FOLLOWUP_[123])\s+(\d{4}-\d{2}-\d{2})/i);
+    const hit=result.match(/^AUTO_(?:SENT|FOLLOWUP_[123]|REPLY)\s+(\d{4}-\d{2}-\d{2})/i);
     if(hit&&hit[1]===today){count++;return;}
     const status=String(r[idx["Status"]]||"").toUpperCase().trim();
     let sentFields=[];
     if(status==="FOLLOWUP_1")sentFields=["Follow-up 1 At"];
     else if(status==="FOLLOWUP_2")sentFields=["Follow-up 1 At","Follow-up 2 At"];
     else if(status==="FOLLOWUP_3"||status==="FOLLOWUP_DONE")sentFields=["Follow-up 1 At","Follow-up 2 At","Follow-up 3 At"];
+    else if(status==="WA_HANDOFF")sentFields=["Sent At","Follow-up 1 At","Follow-up 2 At","Follow-up 3 At"];
     sentFields.forEach(function(h){if(isTodayWib_(r[idx[h]],today))count++;});
   });
   return count;
@@ -711,74 +712,102 @@ function fallbackReply_(business,service,inboundBody,waNumber){
 }
 
 function scanReplies_(limit){
-  const sh=sheet_(),last=sh.getLastRow();
-  if(last<2)return json_({ok:true,replied:0});
-  const threads=GmailApp.search("in:inbox newer_than:14d -from:me",0,100);
-  const owner=ownerEmail_();let replied=0,matched=0,aiReplied=0,aiFallback=0;
-  for(let ti=0;ti<threads.length&&replied<limit;ti++){
-    const thread=threads[ti],subject=String(thread.getFirstMessageSubject()||"");
-    const m=subject.match(/\[SJ-([a-f0-9]{12})\]/i);
-    let row=-1;
-    if(m)row=findRowById_(m[1]);
+  const lock=LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try{
+    const sh=sheet_(),last=sh.getLastRow();
+    if(last<2)return json_({ok:true,replied:0,daily_limit:DAILY_SEND_LIMIT});
+    const threads=GmailApp.search("in:inbox newer_than:14d -from:me",0,100);
+    const owner=ownerEmail_();
+    let replied=0,matched=0,aiReplied=0,aiFallback=0;
+    let dailySent=automatedSendsToday_();
+    let remainingQuota=Math.max(0,MailApp.getRemainingDailyQuota());
+    const replyLimit=Math.min(
+      Math.max(0,Number(limit||40)),
+      remainingQuota,
+      Math.max(0,DAILY_SEND_LIMIT-dailySent)
+    );
+    for(let ti=0;ti<threads.length;ti++){
+      const thread=threads[ti],subject=String(thread.getFirstMessageSubject()||"");
+      const m=subject.match(/\[SJ-([a-f0-9]{12})\]/i);
+      let row=-1;
+      if(m)row=findRowById_(m[1]);
 
-    const msgs=thread.getMessages();let inbound=null;
-    for(let i=msgs.length-1;i>=0;i--){
-      const from=String(msgs[i].getFrom()||"").toLowerCase();
-      if(owner && from.indexOf(owner)===-1){inbound=msgs[i];break;}
+      const msgs=thread.getMessages();let inbound=null;
+      for(let i=msgs.length-1;i>=0;i--){
+        const from=String(msgs[i].getFrom()||"").toLowerCase();
+        if(owner && from.indexOf(owner)===-1){inbound=msgs[i];break;}
+      }
+      if(!inbound)continue;
+
+      if(row<2){
+        const fromHeader=String(inbound.getFrom()||"");
+        const emailMatch=fromHeader.match(/<([^>]+)>/)||fromHeader.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+        const inboundEmail=(emailMatch?(emailMatch[1]||emailMatch[0]):fromHeader).toLowerCase().trim();
+        row=findRowByEmail_(inboundEmail);
+      }
+      if(row<2)continue;
+      matched++;
+
+      const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
+      if(["WA_HANDOFF","OPTOUT"].indexOf(status)>=0)continue;
+
+      const body=String(inbound.getPlainBody()||"").slice(0,5000).trim();
+      if(!body)continue;
+      if(body.toUpperCase().indexOf("UNSUBSCRIBE")!==-1){
+        sh.getRange(row,col_("Status")).setValue("OPTOUT");
+        sh.getRange(row,col_("Opt Out")).setValue("YES");
+        continue;
+      }
+
+      // Always scan for opt-outs, even after today's automated-send cap is reached.
+      // Other automated replies wait until the next available daily allowance.
+      if(replied>=replyLimit)continue;
+
+      const business=String(sh.getRange(row,col_("Nama bisnis")).getValue()||"Perusahaan");
+      const email=String(sh.getRange(row,col_("Email")).getValue()||"");
+      const service="Otomasi workflow menggunakan n8n 24/7";
+      const pain=String(sh.getRange(row,col_("Pain point")).getValue()||"");
+      const originalSubject=String(sh.getRange(row,col_("Subject")).getValue()||"");
+      const originalBody=String(sh.getRange(row,col_("Body")).getValue()||"").slice(0,6000);
+      const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\b/i.test(body)?"INTERESTED":"REPLIED";
+      const waNumber=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\D/g,"");
+
+      let replyText="";
+      try{
+        replyText=geminiReply_(business,service,pain,originalSubject,originalBody,body,waNumber);
+        if(replyText)aiReplied++;
+      }catch(err){
+        console.log("Gemini reply failed: "+String(err));
+      }
+      if(!replyText){
+        replyText=fallbackReply_(business,service,body,waNumber);
+        aiFallback++;
+      }
+      replyText=portfolioOfferBody_(replyText);
+
+      try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
+      const sentAt=now_();
+      dailySent++;
+      storeAutomatedSendsToday_(dailySent);
+      remainingQuota=Math.max(0,remainingQuota-1);
+      sh.getRange(row,col_("Status")).setValue("WA_HANDOFF");
+      sh.getRange(row,col_("Reply At")).setValue(sentAt);
+      sh.getRange(row,col_("Reply Intent")).setValue(intent);
+      sh.getRange(row,col_("Last Reply")).setValue(body.slice(0,1500));
+      sh.getRange(row,col_("WhatsApp Handoff")).setValue(waNumber?"https://wa.me/"+waNumber:"");
+      sh.getRange(row,col_(SEND_RESULT_COL)).setValue("AUTO_REPLY "+Utilities.formatDate(sentAt,"Asia/Jakarta","yyyy-MM-dd HH:mm:ss"));
+      sh.getRange(row,col_("Last Error")).clearContent();
+      replied++;
     }
-    if(!inbound)continue;
-
-    if(row<2){
-      const fromHeader=String(inbound.getFrom()||"");
-      const emailMatch=fromHeader.match(/<([^>]+)>/)||fromHeader.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);
-      const inboundEmail=(emailMatch?(emailMatch[1]||emailMatch[0]):fromHeader).toLowerCase().trim();
-      row=findRowByEmail_(inboundEmail);
-    }
-    if(row<2)continue;
-    matched++;
-
-    const status=String(sh.getRange(row,col_("Status")).getValue()||"").toUpperCase();
-    if(["WA_HANDOFF","OPTOUT"].indexOf(status)>=0)continue;
-
-    const body=String(inbound.getPlainBody()||"").slice(0,5000).trim();
-    if(!body)continue;
-    if(body.toUpperCase().indexOf("UNSUBSCRIBE")!==-1){
-      sh.getRange(row,col_("Status")).setValue("OPTOUT");
-      sh.getRange(row,col_("Opt Out")).setValue("YES");
-      continue;
-    }
-
-    const business=String(sh.getRange(row,col_("Nama bisnis")).getValue()||"Perusahaan");
-    const email=String(sh.getRange(row,col_("Email")).getValue()||"");
-    const service=String(sh.getRange(row,col_("Layanan direkomendasikan")).getValue()||"automation AI");
-    const pain=String(sh.getRange(row,col_("Pain point")).getValue()||"");
-    const originalSubject=String(sh.getRange(row,col_("Subject")).getValue()||"");
-    const originalBody=String(sh.getRange(row,col_("Body")).getValue()||"").slice(0,6000);
-    const intent=/harga|price|biaya|cost|tertarik|minat|interested|bisa|boleh|minta|info|detail|contoh|diskusi|call|meeting|whatsapp|wa\\b/i.test(body)?"INTERESTED":"REPLIED";
-    const waNumber=String(PropertiesService.getScriptProperties().getProperty("WA_NUMBER")||"").replace(/\\D/g,"");
-
-    let replyText="";
-    try{
-      replyText=geminiReply_(business,service,pain,originalSubject,originalBody,body,waNumber);
-      if(replyText)aiReplied++;
-    }catch(err){
-      console.log("Gemini reply failed: "+String(err));
-    }
-    if(!replyText){
-      replyText=fallbackReply_(business,service,body,waNumber);
-      aiFallback++;
-    }
-
-    try{thread.reply(replyText,{name:AGENCY_NAME});}catch(e){continue;}
-    sh.getRange(row,col_("Status")).setValue("WA_HANDOFF");
-    sh.getRange(row,col_("Reply At")).setValue(now_());
-    sh.getRange(row,col_("Reply Intent")).setValue(intent);
-    sh.getRange(row,col_("Last Reply")).setValue(body.slice(0,1500));
-    sh.getRange(row,col_("WhatsApp Handoff")).setValue(waNumber?"https://wa.me/"+waNumber:"");
-    sh.getRange(row,col_("Last Error")).clearContent();
-    replied++;
+    return json_({
+      ok:true,replied:replied,matched:matched,ai_replied:aiReplied,ai_fallback:aiFallback,
+      scanned_threads:threads.length,daily_limit:DAILY_SEND_LIMIT,daily_sent:dailySent,
+      daily_remaining:Math.max(0,DAILY_SEND_LIMIT-dailySent),remaining_quota:remainingQuota
+    });
+  }finally{
+    try{lock.releaseLock();}catch(e){}
   }
-  return json_({ok:true,replied:replied,matched:matched,ai_replied:aiReplied,ai_fallback:aiFallback,scanned_threads:threads.length});
 }
 function ingestContent_(rows){
   const sh=contentPlanningSheet_(),existing={};
@@ -873,11 +902,10 @@ function salesAutomation_(){
   try{
     removeLegacyAutomationTriggers_();
     let replies,sends,followups;
-    // Send first so a slow Gmail reply scan cannot block outbound sales.
-    try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
-    try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
-    // Keep reply scanning bounded; any transient failure is logged and retried next cycle.
+    // Prioritise replies from interested prospects, then due follow-ups, then new outreach.
     try{replies=scanReplies_(10);}catch(e){replies=json_({ok:false,error:String(e)});}
+    try{followups=processFollowups_(MAX_FOLLOWUPS_PER_RUN);}catch(e){followups=json_({ok:false,error:String(e)});}
+    try{sends=autoSendBatch_(BATCH_SEND_LIMIT);}catch(e){sends=json_({ok:false,error:String(e)});}
     const details=logSalesCycle_(replies,sends,followups);
     const cycleOk=Boolean(details && details.replies && details.replies.ok && details.sends && details.sends.ok && details.followups && details.followups.ok);
     return json_({ok:cycleOk,cycle_status:cycleOk?"OK":"PARTIAL_OR_ERROR",replies:details.replies,sends:details.sends,followups:details.followups});
@@ -885,7 +913,6 @@ function salesAutomation_(){
     try{lock.releaseLock();}catch(e){}
   }
 }
-
 function hourlyAutomation_(){
   // Legacy trigger compatibility: no-op. New sales cycle runs every 2 hours.
   return;
