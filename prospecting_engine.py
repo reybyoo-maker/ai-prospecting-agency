@@ -65,6 +65,16 @@ EMAIL_RE = re.compile(
 )
 BLOCKED = ("noreply@","no-reply@","donotreply@","do-not-reply@","example@")
 SERVICE_KEYS={x["key"] for x in SERVICES}
+PORTFOLIO_URL = "https://agencyai.reybyoo.workers.dev/"
+AUTOMATION_OFFER = "Saya menawarkan jasa pembuatan otomasi workflow menggunakan n8n yang dirancang berjalan 24/7 sesuai kebutuhan operasional bisnis."
+
+def add_portfolio_offer(body):
+    body = str(body or "").strip()
+    if not re.search(r"\bn8n\b", body, re.I) or not re.search(r"24\s*/\s*7", body):
+        body = (body + "\n\n" if body else "") + AUTOMATION_OFFER
+    if PORTFOLIO_URL not in body:
+        body = (body + "\n\n" if body else "") + "Silakan cek portofolio saya di: " + PORTFOLIO_URL
+    return body
 
 def fallback_city(lead):
     q=str(lead.get("source_query",""))
@@ -119,6 +129,7 @@ def clean_ai_result(ai, lead):
               "Kalau relevan, saya bisa kirim contoh alur kerja singkat untuk dipertimbangkan.\n\n"
               "Jika email ini tidak relevan, balas UNSUBSCRIBE dan kami tidak akan menghubungi lagi.\n\n"
               "Salam,\nRey\nSonjaya Remote Business Services")
+    body = add_portfolio_offer(body)
     return {
         "business_name":business,"city":city,"niche":niche,
         "score":max(0,min(100,int(ai.get("score") or 0))),
@@ -351,10 +362,12 @@ Lead:
 Aturan:
 - Temukan kebutuhan yang terlihat dari evidence sebelum memilih layanan.
 - Jangan mengarang karyawan, omzet, pelanggan, harga, followers, masalah internal, atau fakta lain.
-- recommended_service HARUS satu service key dari katalog.
+- recommended_service HARUS satu service key dari katalog; jangan menawarkan layanan lain di luar katalog.
+- Fokus layanan yang dijual adalah otomasi workflow menggunakan n8n yang dirancang berjalan 24/7 sesuai kebutuhan operasional bisnis.
 - Buat email cold outreach bahasa Indonesia yang singkat, personal, sopan, dan relevan.
-- Nyatakan bahwa pekerjaan dapat dilakukan remote oleh tim kecil yang memakai AI sebagai alat bantu dan tetap diawasi manusia.
-- Minta langkah kecil seperti membalas email untuk melihat contoh.
+- Jelaskan manfaat otomasi hanya sejauh didukung evidence; jangan menjanjikan hasil atau uptime 100%.
+- Minta penerima mengecek portofolio di {PORTFOLIO_URL} dan mengundang mereka membalas email bila tertarik.
+- Sertakan kalimat layanan otomasi n8n 24/7 dan URL portofolio yang tepat.
 - Sertakan kalimat opt-out persis: "Jika email ini tidak relevan, balas UNSUBSCRIBE dan kami tidak akan menghubungi lagi."
 - Jangan menyebut crawler, scraping, atau teknik discovery sebagai alasan menghubungi mereka.
 - Jangan menjanjikan hasil bisnis.
