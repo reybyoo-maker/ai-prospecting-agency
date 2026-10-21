@@ -398,36 +398,86 @@ def enrich_candidate(url, evidence):
     return combined, "", best_url
 
 def direct_html_search(query):
-    """Fallback search using public HTML pages when DDGS providers return no results."""
+    """Fallback search using several public HTML search pages when DDGS fails."""
     language = "en-us" if is_international_query(query) else "id-id"
     providers = [
+        ("google_html", "https://www.google.com/search", {"q": query, "num": 10, "hl": language}),
         ("bing_html", "https://www.bing.com/search", {"q": query, "count": 10, "setlang": language}),
         ("duckduckgo_html", "https://html.duckduckgo.com/html/", {"q": query}),
     ]
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150 Safari/537.36"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": f"{language},en;q=0.8",
+    }
+    blocked_hosts = (
+        "google.com", "bing.com", "duckduckgo.com", "microsoft.com",
+        "youtube.com", "facebook.com", "instagram.com", "linkedin.com",
+        "tiktok.com", "wikipedia.org",
+    )
     for backend, endpoint, params in providers:
         try:
-            r=requests.get(endpoint, params=params, headers=headers, timeout=SEARCH_TIMEOUT, allow_redirects=True)
+            r = requests.get(
+                endpoint, params=params, headers=headers,
+                timeout=SEARCH_TIMEOUT, allow_redirects=True,
+            )
+            print("DIRECT_SEARCH_HTTP", backend, r.status_code)
             if r.status_code >= 400:
                 continue
-            soup=BeautifulSoup(r.text,"html.parser")
-            results=[]
-            if backend=="bing_html":
-                for item in soup.select("li.b_algo")[:10]:
-                    a=item.select_one("h2 a")
-                    if not a or not a.get("href"): continue
-                    sn=item.select_one(".b_caption p")
-                    results.append({"title":norm(a.get_text(" ",strip=True)),"href":a.get("href"),"body":norm(sn.get_text(" ",strip=True) if sn else "")})
+            soup = BeautifulSoup(r.text, "html.parser")
+            results = []
+            seen = set()
+
+            def add_result(anchor, container=None):
+                if not anchor or not anchor.get("href"):
+                    return
+                href = str(anchor.get("href", "")).strip()
+                title = norm(anchor.get_text(" ", strip=True))
+                if href.startswith("/url?q="):
+                    from urllib.parse import parse_qs, urlparse
+                    href = parse_qs(urlparse(href).query).get("q", [""])[0]
+                parsed = urlparse(href)
+                host = (parsed.hostname or "").lower()
+                if parsed.scheme not in ("http", "https") or not host:
+                    return
+                if any(host == item or host.endswith("." + item) for item in blocked_hosts):
+                    return
+                if not title or len(title) < 5 or href in seen:
+                    return
+                seen.add(href)
+                body = ""
+                if container is not None:
+                    body = norm(container.get_text(" ", strip=True))
+                    if body == title:
+                        body = ""
+                    elif title and title in body:
+                        body = norm(body.replace(title, "", 1))
+                results.append({"title": title[:300], "href": href, "body": body[:1200]})
+
+            if backend == "google_html":
+                for heading in soup.select("h3")[:20]:
+                    add_result(heading.find_parent("a"), heading.parent.parent if heading.parent and heading.parent.parent else heading.parent)
+            elif backend == "bing_html":
+                for item in soup.select("li.b_algo")[:20]:
+                    add_result(item.select_one("h2 a"), item)
             else:
-                for item in soup.select(".result")[:10]:
-                    a=item.select_one(".result__a")
-                    if not a or not a.get("href"): continue
-                    sn=item.select_one(".result__snippet")
-                    results.append({"title":norm(a.get_text(" ",strip=True)),"href":a.get("href"),"body":norm(sn.get_text(" ",strip=True) if sn else "")})
+                for item in soup.select(".result")[:20]:
+                    add_result(item.select_one(".result__a"), item)
+
+            # Markup changes and anti-bot interstitials can invalidate provider-specific selectors.
+            # As a last parser fallback, collect external links with descriptive text.
+            if not results:
+                for anchor in soup.select("a[href]"):
+                    add_result(anchor, anchor.parent)
+                    if len(results) >= 10:
+                        break
+            print("DIRECT_SEARCH_RESULTS", backend, len(results))
             if results:
-                return results, backend
+                return results[:10], backend
         except Exception as e:
-            print("DIRECT_SEARCH_ERROR",backend,type(e).__name__,e)
+            print("DIRECT_SEARCH_ERROR", backend, type(e).__name__, str(e)[:180])
     return [], "none"
 
 def search_with_fallback(ddgs, query):
