@@ -1,196 +1,75 @@
-# Sonjaya AI Remote Agency
+# AIGROWTH — Automatic Prospecting & Outreach
 
-Production system sekarang hanya memiliki **2 flow aktif**.
+Repository ini menjalankan discovery bisnis publik, riset/scoring Gemini, sinkronisasi panel Database Scraping, pengiriman email, dan deteksi balasan. Sistem scraper tidak menggunakan Google Sheets atau Apps Script.
 
-## FLOW 1 — SALES TEAM
+## Alur utama
 
-Alur:
+1. GitHub Actions berjalan otomatis setiap 2 jam.
+2. prospecting_engine.py mencari bisnis dari web publik, mengambil bukti relevan, dan memvalidasi alamat email yang dipublikasikan.
+3. Gemini memberi skor dan menulis pesan personal. Skor minimal 75 memenuhi syarat untuk email otomatis.
+4. Prospek baru dikirim ke endpoint dashboard dengan status queued dan ID stabil.
+5. Email yang diterima server SMTP memperbarui record ID yang sama menjadi sent.
+6. Inbox IMAP dipindai untuk balasan. Status replied dikirim ke dashboard agar tercipta lead CRM. Permintaan berhenti kontak mengubah status menjadi blocked dan menghentikan follow-up.
+7. Follow-up dijadwalkan sekitar hari ke-2, ke-5, dan ke-9. Jika inbox tidak bisa diperiksa, follow-up tidak dikirim.
 
-`Discovery web publik -> validasi email publik -> Gemini research/scoring -> Google Sheets -> kirim otomatis -> follow-up otomatis -> deteksi reply -> balasan contextual AI -> WhatsApp handoff`
+## Kontrak dashboard
 
-### Discovery
-- GitHub Actions berjalan terjadwal setiap 2 jam.
-- Mesin mencari bisnis Indonesia dari web publik.
-- Kandidat tanpa email publik dibuang.
-- Email dideduplicasi.
-- Evidence publik disimpan.
-- Gemini memilih kebutuhan/service berdasarkan evidence.
-- Lead dengan skor >= 75 masuk status `READY`; sisanya `REVIEW`.
+Endpoint:
+https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape
 
-### Automatic email
-Email pertama sekarang **tidak lagi manual**.
+Header:
+Authorization: Bearer INGEST_TOKEN
 
-GitHub Actions menjalankan satu sales cycle setiap 2 jam:
-1. discovery + scoring + queueing lead baru,
-2. scan reply terbaru,
-3. proses follow-up yang sudah jatuh tempo,
-4. proses follow-up yang sudah jatuh tempo terlebih dahulu, lalu gunakan sisa kuota harian untuk email awal READY (prioritas skor tertinggi); gabungan email awal dan follow-up otomatis dibatasi **maksimal 20 pesan per hari WIB**.
+Setiap record mengikuti kontrak Database Scraping:
+id, platform, name, handle, contact, phone, url, category, city, campaign, message_preview, status, sent_at, replied_at, error.
 
-Setelah initial email berhasil:
-`SENT -> FOLLOWUP_1 (+2 hari) -> FOLLOWUP_2 (+5 hari) -> FOLLOWUP_3 (+9 hari) -> FOLLOWUP_DONE`
+Status sistem:
+queued, sent, replied, failed, blocked.
 
-Jika prospek membalas, follow-up berhenti. Jika mereka mengirim `UNSUBSCRIBE`, status berubah menjadi `OPTOUT` dan komunikasi berikutnya dihentikan.
+Status delivered dan read tidak dibuat-buat. Status itu hanya boleh ditulis jika provider pengiriman benar-benar mengonfirmasinya. SMTP sukses dicatat sebagai sent.
 
-Semua pengiriman menggunakan lock, retry/error state, Lead ID, dan subject tag `[SJ-xxxxxxxxxxxx]` agar thread dapat dilacak.
+ID dibentuk dari HMAC email yang dikunci oleh INGEST_TOKEN: stabil antar-run, tetapi tidak menampilkan alamat email dalam ID.
 
-### Daily automated email limit
-- Batas keras sistem adalah **maksimal 20 email otomatis per hari kalender WIB**, mencakup balasan AI kepada prospek, follow-up terjadwal, dan email awal.
-- Batas yang sama dihitung lintas workflow menggunakan counter harian di Apps Script Properties; menjalankan workflow berulang kali tidak mengatur ulang batas.
-- Prioritas pengiriman: balasan prospek yang sudah masuk, kemudian follow-up yang jatuh tempo, lalu email awal ke prospek baru.
-- Sistem tetap memindai email masuk untuk memproses permintaan `UNSUBSCRIBE`, meskipun kuota pengiriman otomatis hari itu telah habis.
-- Semua jenis email otomatis tunduk pada kuota akun Google melalui `MailApp.getRemainingDailyQuota()`; sistem memakai batas yang lebih rendah antara kuota Google dan batas internal 20 email per hari.
-- Sebelum mengirim, GitHub Actions memeriksa bahwa Apps Script live sudah menggunakan versi `2026-10-21.1`. Jika belum, tahap pengiriman otomatis dilewati agar versi lama tidak mengirim melebihi batas; lead tetap dapat ditemukan dan dimasukkan ke antrean.
-- Agar pengiriman aktif kembali, salin `apps-script/Code.gs` versi terbaru ke Google Apps Script lalu simpan dan perbarui deployment Web App. Setelah endpoint mengembalikan versi `2026-10-21.1`, workflow berikutnya akan melanjutkan pengiriman.
+## GitHub Secrets yang diperlukan
 
-### Main service offer
-Layanan utama yang ditawarkan melalui email prospek adalah **otomasi workflow menggunakan n8n yang dirancang berjalan 24/7** sesuai kebutuhan dan konfigurasi operasional bisnis. Email awal dan follow-up mengarahkan penerima ke portofolio: https://agencyai.reybyoo.workers.dev/
+Buka Repository → Settings → Secrets and variables → Actions.
 
-## FLOW 2 — CONTENT STUDIO
+Untuk scraping dan sinkronisasi:
+- GEMINI_API_KEY
+- INGEST_TOKEN — Bearer token yang cocok dengan dashboard
 
-Tidak ada lagi auto-upload.
+Untuk email otomatis:
+- SMTP_HOST
+- SMTP_PORT — 465 untuk SSL atau 587 untuk STARTTLS
+- SMTP_USERNAME
+- SMTP_PASSWORD
+- SMTP_FROM
+- SMTP_REPLY_TO (opsional, default mengikuti SMTP_FROM)
 
-Alur:
+Untuk deteksi balasan dan follow-up:
+- IMAP_HOST — default imap.gmail.com
+- IMAP_PORT — default 993
+- IMAP_USERNAME (opsional, default mengikuti SMTP_USERNAME)
+- IMAP_PASSWORD (opsional, default mengikuti SMTP_PASSWORD)
 
-`Content strategy -> Gemini script -> quality gate -> 7-slide feed carousel -> JPG/PNG/PDF -> Google Sheets -> manual upload oleh tim`
+Untuk Gmail, gunakan App Password dan pastikan IMAP aktif. Jangan menaruh token, API key, atau password di source code.
 
-### Content standard
-Setiap batch membuat 7 hari konten.
+## Pengaktifan pengiriman
 
-Struktur setiap carousel:
-1. Hook
-2. Problem
-3. Insight
-4. Framework
-5. Example
-6. Mistake / objection
-7. CTA
+Pengiriman otomatis sengaja nonaktif saat migrasi. Setelah menambahkan secrets SMTP/IMAP dan memeriksa data queued di dashboard, buat Actions Variable bernama ENABLE_AUTO_EMAIL dengan nilai true. Set false untuk menjeda pengiriman.
 
-Setiap hari menggunakan pilar berbeda dan design family berbeda.
+Scraping dan sinkronisasi ke dashboard tetap membutuhkan GEMINI_API_KEY dan INGEST_TOKEN.
 
-Design family:
-- BOLD_EDITORIAL
-- SPLIT_SCREEN
-- DASHBOARD
-- FLOW_DIAGRAM
-- CARD_STACK
-- TYPE_POSTER
-- MINIMAL_TECH
+## Batas dan keamanan
 
-Standar copy:
-- Bahasa Indonesia natural.
-- 1 gagasan utama per slide.
-- Headline kuat dan ringkas.
-- Contoh operasional realistis.
-- Tidak mengarang testimonial, omzet, statistic, client, pricing, atau performance.
-- Soft selling maksimum satu slide.
-- CTA bervariasi.
-- Tidak menggunakan slogan AI generik atau clickbait murahan.
+- Maksimal 20 email otomatis per hari kalender WIB, termasuk follow-up.
+- Maksimal tiga percobaan pengiriman per record.
+- Batch antrean harus diterima dashboard sebelum sistem mengirim email.
+- Balasan dan opt-out menghentikan follow-up.
+- State serta counter tersimpan sebagai ciphertext pada runtime/prospecting-state.enc. File tersebut tidak menyimpan data kontak dalam bentuk teks biasa.
+- INGEST_TOKEN digunakan untuk derivasi kunci enkripsi state. Jangan mengganti token tanpa migrasi state; jika dekripsi gagal, pengiriman dihentikan agar tidak menggandakan email.
+- Panel Content Studio tetap terpisah. Asetnya disimpan di GitHub untuk unggah manual dan tidak disinkronkan ke database eksternal.
 
-### Output Content Planning
-Google Sheets `Content Planning` menyimpan:
-- tanggal
-- platform
-- format
-- tujuan
-- topik
-- hook
-- caption
-- CTA
-- jumlah slide
-- PDF carousel
-- cover
-- Slides JSON
-- status
-- publish mode
-- pilar konten
-- script lengkap per slide
-- URL Slide 1 sampai Slide 7
+## Menjalankan manual
 
-Status production:
-`READY_FOR_MANUAL_UPLOAD`
-
-Tidak ada proses upload otomatis ke Instagram atau TikTok.
-
-## Google Sheets
-
-Apps Script mengelola:
-- `Prospects`
-- `Content`
-- `Content Planning`
-
-Kolom utama Prospects:
-- Lead ID
-- Tanggal ditemukan
-- Nama bisnis
-- Email
-- Sumber email
-- Website
-- Social
-- Kota
-- Kategori
-- Bukti publik
-- Skor
-- Prioritas
-- Kebutuhan terdeteksi
-- Layanan direkomendasikan
-- Pain point
-- Hook personal
-- Subject
-- Body
-- Status
-- Sent At
-- Follow-up 1 At
-- Follow-up 2 At
-- Follow-up 3 At
-- Reply At
-- Reply Intent
-- Last Reply
-- WhatsApp Handoff
-- Attempts
-- Last Error
-- Opt Out
-
-## Automation
-
-Sales discovery tetap menggunakan GitHub Actions terjadwal. Scheduled workflows berjalan dari default branch dan dapat mengalami delay ketika load GitHub tinggi, sehingga sistem tidak menjanjikan ketepatan detik; interval 2 jam tetap menjadi target jadwal.
-
-GitHub Actions menjadi satu-satunya scheduler Sales. Apps Script hanya menjadi execution layer untuk Google Sheets dan Gmail.
-
-## Social platforms
-
-Instagram dan TikTok **tidak lagi memiliki flow otomatis** di project ini.
-
-Tidak ada:
-- auto-post
-- auto-upload
-- auto-DM
-- auto-comment reply
-- TikTok comment -> DM
-- Instagram comment -> DM
-
-Semua aktivitas social posting dilakukan manual oleh tim Content Studio.
-
-## Retired code
-
-Kode dan workflow social/publishing lama sengaja dipensiunkan agar tidak ada jalur ketiga yang berjalan diam-diam.
-
-Production source utama:
-- `prospecting_engine.py`
-- `content_runner.py`
-- `service_catalog.py`
-- `apps-script/Code.gs`
-- `.github/workflows/daily.yml`
-- `.github/workflows/content-daily.yml`
-- `.github/workflows/healthcheck.yml`
-- `.github/workflows/validate.yml`
-
-Folder/file legacy yang masih tersimpan tetapi tidak aktif boleh diperlakukan sebagai arsip sampai cleanup terakhir dilakukan.
-
-## Security rules
-
-- API keys dan webhook token disimpan di GitHub Secrets / Apps Script Properties.
-- Secret tidak ditulis di source code.
-- Email hanya diproses dari data publik.
-- `UNSUBSCRIBE` menghentikan follow-up.
-- Sending memakai lock dan state machine.
-- Content Studio tidak mempunyai hak untuk auto-publish social.
+Buka Actions → AIGROWTH Automatic Scraping & Outreach → Run workflow. Status sinkronisasi terlihat di log GitHub Actions. Pengujian POST yang nyata membutuhkan INGEST_TOKEN yang cocok dengan dashboard.
