@@ -1,4 +1,4 @@
-name: Sonjaya 24x7 AI Sales Engine
+name: AIGROWTH Automatic Scraping & Outreach
 
 on:
   workflow_dispatch:
@@ -6,97 +6,63 @@ on:
     - cron: "17 */2 * * *"
 
 concurrency:
-  group: sonjaya-sales-discovery
+  group: aigrowth-dashboard-scraping
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  run-engine:
+  scrape-and-outreach:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
+      - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Discover, score, and queue leads
+      - name: Scrape, score, and ingest directly into the dashboard
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
           GEMINI_MODEL: "gemini-3.5-flash-lite"
           MAX_PER_RUN: "80"
           MAX_AI_PER_RUN: "60"
+          MAX_DAILY_SENDS: "20"
+          MAX_SENDS_PER_RUN: "20"
+          MIN_SCORE_TO_SEND: "75"
+          CAMPAIGN_NAME: "aigrowth-prospecting"
+          ENABLE_AUTO_EMAIL: ${{ vars.ENABLE_AUTO_EMAIL || 'false' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_REPLY_TO: ${{ secrets.SMTP_REPLY_TO }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
+          IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
           SEARCH_BACKENDS: "google,brave,bing,duckduckgo"
           QUERIES_PER_RUN: "24"
           SEARCH_TIMEOUT: "25"
         run: python prospecting_engine.py
-      - name: Verify daily-send cap is deployed in Apps Script
-        id: appscript_version
-        env:
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+      - name: Persist encrypted delivery and opt-out state
+        if: always()
         run: |
-          python - <<'PY'
-          import os, requests
-          ready = False
-          try:
-              response = requests.post(
-                  os.environ["SHEET_WEBHOOK_URL"],
-                  json={"token": os.environ["WEBHOOK_TOKEN"], "action": "healthcheck"},
-                  timeout=30,
-              )
-              response.raise_for_status()
-              data = response.json()
-              version = str(data.get("version", "unknown"))
-              ready = bool(data.get("ok")) and version == "2026-10-21.1"
-              print("APPS_SCRIPT_VERSION", version)
-              print("OUTBOUND_SEND_READY", ready)
-          except Exception as exc:
-              print("APPS_SCRIPT_VERSION_CHECK_FAILED", repr(exc))
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("ready=" + ("true" if ready else "false") + "\n")
-          PY
-      - name: Run outbound sales stages
-        if: steps.appscript_version.outputs.ready == 'true'
-        env:
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
-        run: |
-          python - <<'PY'
-          import os, requests, sys, time
-          base = {"token": os.environ["WEBHOOK_TOKEN"]}
-          url = os.environ["SHEET_WEBHOOK_URL"]
-
-          def post(action, timeout=180, required=True, **extra):
-              payload = dict(base, action=action, **extra)
-              last = None
-              for attempt in range(3):
-                  try:
-                      r = requests.post(url, json=payload, timeout=timeout)
-                      print(action, r.status_code, r.text[:3000])
-                      r.raise_for_status()
-                      data = r.json()
-                      if required and not data.get("ok"):
-                          raise RuntimeError(data)
-                      return data
-                  except Exception as exc:
-                      last = exc
-                      if attempt < 2:
-                          time.sleep(2 * (attempt + 1))
-              if required:
-                  raise last
-              print("OPTIONAL_STAGE_FAILED", action, repr(last))
-              return {"ok": False, "error": str(last)}
-
-          # One shared daily cap covers AI replies, due follow-ups, and new outreach.
-          # Handle replies first, then follow-ups, then new prospect emails.
-          post("scan_replies", limit=10, timeout=180, required=False)
-          post("process_followups", limit=20, timeout=180, required=True)
-          send = post("send_queue", limit=20, timeout=180, required=True)
-          print("SALES_STAGES_OK", {"send": send})
-          PY
+          if [ ! -f runtime/prospecting-state.enc ]; then
+            echo "No encrypted state file was created."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+users.noreply.github.com"
+          git add runtime/prospecting-state.enc
+          if git diff --cached --quiet; then
+            echo "State unchanged."
+            exit 0
+          fi
+          git commit -m "chore: persist encrypted prospecting state [skip ci]"
+          git push
