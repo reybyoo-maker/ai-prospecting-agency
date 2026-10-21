@@ -1,6 +1,6 @@
 # AIGROWTH — Automatic Prospecting & Outreach
 
-Repository ini menjalankan discovery bisnis publik, riset/scoring Gemini, sinkronisasi panel Database Scraping, pengiriman email, dan deteksi balasan. Sistem scraper tidak menggunakan Google Sheets atau Apps Script.
+Repository ini menjalankan discovery bisnis publik di Indonesia dan sejumlah pasar internasional, riset/scoring Gemini, sinkronisasi langsung ke panel Database Scraping AIGROWTH, serta dukungan email dan deteksi balasan. Sistem tidak menggunakan Google Sheets atau Apps Script untuk ingest prospek. Email otomatis tetap nonaktif secara default.
 
 ## Alur utama
 
@@ -11,6 +11,15 @@ Repository ini menjalankan discovery bisnis publik, riset/scoring Gemini, sinkro
 5. Email yang diterima server SMTP memperbarui record ID yang sama menjadi sent.
 6. Inbox IMAP dipindai untuk balasan. Status replied dikirim ke dashboard agar tercipta lead CRM. Permintaan berhenti kontak mengubah status menjadi blocked dan menghentikan follow-up.
 7. Follow-up dijadwalkan sekitar hari ke-2, ke-5, dan ke-9. Jika inbox tidak bisa diperiksa, follow-up tidak dikirim.
+
+## Gaya outreach dan pasar internasional
+
+- Email dibuat singkat, hangat, profesional, dan disesuaikan dengan masalah yang benar-benar didukung bukti publik.
+- Prospek Indonesia menggunakan Bahasa Indonesia; prospek internasional menggunakan Bahasa Inggris.
+- Discovery mengalokasikan query untuk Indonesia dan sejumlah kota internasional secara bergantian.
+- Pesan menawarkan audit workflow dan konsultasi awal gratis tanpa komitmen.
+- Penghematan biaya dijelaskan secara wajar untuk pekerjaan repetitif; sistem tidak menjanjikan otomasi selalu lebih murah atau menggantikan semua karyawan.
+- Footer memakai https://aigrowth.my.id, Instagram @ai.growth.agency, dan tanda tangan Rey — Founder, AI Growth Agency.
 
 ## Kontrak dashboard
 
