@@ -97,6 +97,32 @@ class OutreachCopyTests(unittest.TestCase):
         self.assertEqual(row["replied_at"], "2026-01-04T12:00:00Z")
         self.assertEqual(row["message_preview"], "Thanks, please send more details.")
 
+
+    def test_reply_headers_match_to_original_prospect(self):
+        from email.message import EmailMessage
+        lead_id = "web-0123456789abcdef01234567"
+        message = EmailMessage()
+        message["Subject"] = "Re: A practical workflow idea"
+        message["From"] = "contact@example.com"
+        message["In-Reply-To"] = "<original-message@example.com>"
+        message["References"] = "<original-message@example.com>"
+        state = {"records": {lead_id: {
+            "record": {"contact": "contact@example.com"},
+            "last_message_id": "<original-message@example.com>",
+        }}}
+        self.assertEqual(engine._message_lead_id(message, state), lead_id)
+
+    def test_sender_does_not_prefix_internal_lead_id_in_subject(self):
+        with patch.object(engine, "_smtp_configured", return_value=True), \
+             patch.object(engine, "SMTP_PORT", 465), \
+             patch.object(engine.smtplib, "SMTP_SSL") as smtp_ssl:
+            server = smtp_ssl.return_value.__enter__.return_value
+            entry = {"record": {"id": "web-0123456789abcdef01234567", "contact": "contact@example.com"}}
+            engine._send_email(entry, "A practical workflow idea", "Hello there")
+            sent_message = server.send_message.call_args.args[0]
+            self.assertEqual(str(sent_message["Subject"]), "A practical workflow idea")
+            self.assertNotIn("[AG-", str(sent_message["Subject"]))
+
     def test_followup_templates_have_real_line_breaks_and_new_brand(self):
         entry = {"record": {"name": "Example Company"}, "email_language": "en"}
         body = engine._followup_copy(entry, 0)
