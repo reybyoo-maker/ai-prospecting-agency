@@ -23,7 +23,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Python syntax
-        run: python -m py_compile prospecting_engine.py service_catalog.py content_runner.py healthcheck.py
+        run: python -m py_compile prospecting_engine.py service_catalog.py content_runner.py healthcheck.py scripts/diagnose_dashboard_auth.py
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
       - name: Confirm active flows do not connect to spreadsheets
         run: |
           if grep -n -E 'SHEET_WEBHOOK_URL|SpreadsheetApp|content_ingest|WEBHOOK_TOKEN' prospecting_engine.py content_runner.py healthcheck.py .github/workflows/daily.yml .github/workflows/content-daily.yml .github/workflows/healthcheck.yml; then
