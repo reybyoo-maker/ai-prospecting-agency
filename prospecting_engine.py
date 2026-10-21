@@ -135,7 +135,7 @@ def add_portfolio_offer(body, language="id"):
         if "unsubscribe" not in low:
             additions.append("If this isn’t relevant, reply UNSUBSCRIBE and I won’t contact you again.")
         if "founder, ai growth agency" not in low and "founder of ai growth agency" not in low:
-            additions.append("Best regards,\\nRey\\nFounder, AI Growth Agency")
+            additions.append("Best regards,\nRey\nFounder, AI Growth Agency")
     else:
         if not any(x in low for x in ("audit gratis", "konsultasi gratis", "konsultasi awal gratis", "audit workflow gratis")):
             additions.append("Saya juga menawarkan audit workflow dan konsultasi awal gratis, tanpa komitmen.")
@@ -148,13 +148,13 @@ def add_portfolio_offer(body, language="id"):
         if "unsubscribe" not in low:
             additions.append("Jika email ini tidak relevan, balas UNSUBSCRIBE dan saya tidak akan menghubungi lagi.")
         if "founder, ai growth agency" not in low:
-            additions.append("Salam hangat,\\nRey\\nFounder, AI Growth Agency")
+            additions.append("Salam hangat,\nRey\nFounder, AI Growth Agency")
 
     if additions:
-        body = (body + "\\n\\n" if body else "") + "\\n\\n".join(additions)
+        body = (body + "\n\n" if body else "") + "\n\n".join(additions)
 
     # Remove legacy signature remnants without changing the recipient's other content.
-    body = body.replace("Founder, AI Growth Agency\\nFounder, AI Growth Agency", "Founder, AI Growth Agency")
+    body = body.replace("Founder, AI Growth Agency\nFounder, AI Growth Agency", "Founder, AI Growth Agency")
     return body
 
 def fallback_city(lead):
@@ -925,13 +925,13 @@ def _followup_copy(entry, stage):
         else:
             opening = "One last follow-up from me. If now isn’t the right time, no worries—I won’t send further follow-ups."
         return (
-            "Hi " + name + " team,\\n\\n" + opening + "\\n\\n"
+            "Hi " + name + " team,\n\n" + opening + "\n\n"
             "I can offer a free, no-obligation workflow audit to spot ways to save manual time and operating costs. "
-            "For suitable repetitive tasks, automation may be more cost-effective than adding manual hours.\\n\\n"
-            "Portfolio: " + PORTFOLIO_URL + "\\n"
-            "Instagram: " + INSTAGRAM_HANDLE + " (" + INSTAGRAM_URL + ")\\n\\n"
-            "If this isn’t relevant, reply UNSUBSCRIBE and I won’t contact you again.\\n\\n"
-            "Best regards,\\nRey\\nFounder, AI Growth Agency"
+            "For suitable repetitive tasks, automation may be more cost-effective than adding manual hours.\n\n"
+            "Portfolio: " + PORTFOLIO_URL + "\n"
+            "Instagram: " + INSTAGRAM_HANDLE + " (" + INSTAGRAM_URL + ")\n\n"
+            "If this isn’t relevant, reply UNSUBSCRIBE and I won’t contact you again.\n\n"
+            "Best regards,\nRey\nFounder, AI Growth Agency"
         )
     if stage == 0:
         opening = "Saya menindaklanjuti pesan sebelumnya tentang cara menyederhanakan pekerjaan yang berulang."
@@ -940,13 +940,13 @@ def _followup_copy(entry, stage):
     else:
         opening = "Ini tindak lanjut terakhir dari saya. Kalau belum relevan saat ini, tidak apa-apa dan saya tidak akan mengirim pesan lanjutan lagi."
     return (
-        "Halo tim " + name + ",\\n\\n" + opening + "\\n\\n"
+        "Halo tim " + name + ",\n\n" + opening + "\n\n"
         "Saya menawarkan audit workflow dan konsultasi awal gratis untuk mencari peluang menghemat waktu kerja manual dan biaya operasional. "
-        "Untuk pekerjaan repetitif tertentu, otomasi bisa lebih hemat dibanding menambah jam kerja manual.\\n\\n"
-        "Portofolio: " + PORTFOLIO_URL + "\\n"
-        "Instagram: " + INSTAGRAM_HANDLE + " (" + INSTAGRAM_URL + ")\\n\\n"
-        "Jika email ini tidak relevan, balas UNSUBSCRIBE dan saya tidak akan menghubungi lagi.\\n\\n"
-        "Salam hangat,\\nRey\\nFounder, AI Growth Agency"
+        "Untuk pekerjaan repetitif tertentu, otomasi bisa lebih hemat dibanding menambah jam kerja manual.\n\n"
+        "Portofolio: " + PORTFOLIO_URL + "\n"
+        "Instagram: " + INSTAGRAM_HANDLE + " (" + INSTAGRAM_URL + ")\n\n"
+        "Jika email ini tidak relevan, balas UNSUBSCRIBE dan saya tidak akan menghubungi lagi.\n\n"
+        "Salam hangat,\nRey\nFounder, AI Growth Agency"
     )
 
 def _send_entry(entry, state, subject, body, is_followup=False):
