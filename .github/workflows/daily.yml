@@ -2,6 +2,12 @@ name: AIGROWTH Automatic Scraping & Outreach
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnose_auth:
+        description: "Run a safe auth diagnostic using an empty records payload only"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "17 */2 * * *"
 
@@ -23,7 +29,14 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Diagnose dashboard auth with empty payload only
+        if: ${{ inputs.diagnose_auth }}
+        env:
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
+        run: python scripts/diagnose_dashboard_auth.py
       - name: Scrape, score, and ingest directly into the dashboard
+        if: ${{ !inputs.diagnose_auth }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
@@ -51,7 +64,7 @@ jobs:
           SEARCH_TIMEOUT: "25"
         run: python prospecting_engine.py
       - name: Persist encrypted delivery and opt-out state
-        if: always()
+        if: ${{ always() && !inputs.diagnose_auth }}
         run: |
           if [ ! -f runtime/prospecting-state.enc ]; then
             echo "No encrypted state file was created."
