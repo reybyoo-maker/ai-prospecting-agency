@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: false
+      inspect_deployment_versions:
+        description: "Read-only: compare latest Worker version with active deployments"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "17 */2 * * *"
 
@@ -39,8 +44,61 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Inspect Worker versions and active deployment (read-only)
+        if: ${{ inputs.inspect_deployment_versions && !inputs.sync_ingest_secret }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, sys, requests
+          account = "4930c889e124c72813dfad52aa3ea507"
+          worker = "aigrowth-owner-dashboard"
+          token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+          if not token:
+              print("INSPECTION_ABORTED: CLOUDFLARE_API_TOKEN secret is missing or unavailable.")
+              sys.exit(1)
+          root = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/{worker}"
+          headers = {"Authorization": f"Bearer {token}"}
+          for label, url in [
+              ("VERSIONS", root + "/versions?per_page=5"),
+              ("DEPLOYMENTS", root + "/deployments"),
+          ]:
+              try:
+                  response = requests.get(url, headers=headers, timeout=30)
+                  print(label + "_HTTP", response.status_code)
+                  data = response.json()
+              except Exception as exc:
+                  print(label + "_READ_FAILED", type(exc).__name__)
+                  sys.exit(1)
+              if not response.ok or not data.get("success"):
+                  for error in data.get("errors", [])[:3]:
+                      print(label + "_API_ERROR", error.get("code"), str(error.get("message", ""))[:200])
+                  sys.exit(1)
+              result = data.get("result") or {}
+              if label == "VERSIONS":
+                  versions = result if isinstance(result, list) else result.get("result", [])
+                  print("LATEST_VERSION_COUNT_RETURNED", len(versions))
+                  for item in versions[:5]:
+                      metadata = item.get("metadata") or {}
+                      annotations = metadata.get("annotations") or {}
+                      print("VERSION", item.get("id"), "NUMBER", item.get("number"), "CREATED", item.get("created_on"), "TAG", annotations.get("workers/tag"), "MESSAGE", str(annotations.get("workers/message", ""))[:120])
+                  latest_id = versions[0].get("id") if versions else None
+              else:
+                  deployments = result.get("deployments", []) if isinstance(result, dict) else []
+                  print("DEPLOYMENT_COUNT_RETURNED", len(deployments))
+                  for i, item in enumerate(deployments[:5]):
+                      active_versions = []
+                      for version in item.get("versions", []) or []:
+                          active_versions.append({"version_id": version.get("version_id"), "percentage": version.get("percentage")})
+                      print("DEPLOYMENT", i + 1, "ID", item.get("id"), "CREATED", item.get("created_on"), "VERSIONS", active_versions)
+                  if deployments and latest_id:
+                      active_ids = [v.get("version_id") for v in (deployments[0].get("versions", []) or [])]
+                      print("LATEST_VERSION_IS_IN_CURRENT_DEPLOYMENT", latest_id in active_ids)
+                  else:
+                      print("DEPLOYMENT_COMPARISON_UNAVAILABLE")
+          PY
       - name: Sync dashboard INGEST_TOKEN from GitHub secret and verify (no records)
-        if: ${{ inputs.sync_ingest_secret }}
+        if: ${{ inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
@@ -106,7 +164,7 @@ jobs:
           sys.exit(1)
           PY
       - name: Inspect dashboard Worker ingest auth (read-only)
-        if: ${{ inputs.inspect_worker_auth && !inputs.sync_ingest_secret }}
+        if: ${{ inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -162,13 +220,13 @@ jobs:
               print("No auth terms found; content response may be a multipart wrapper or bundle with different names.")
           PY
       - name: Diagnose dashboard auth with empty payload only
-        if: ${{ inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret }}
+        if: ${{ inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
         env:
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
           DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
         run: python scripts/diagnose_dashboard_auth.py
       - name: Scrape, score, and ingest directly into the dashboard
-        if: ${{ !inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret }}
+        if: ${{ !inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
@@ -196,7 +254,7 @@ jobs:
           SEARCH_TIMEOUT: "25"
         run: python prospecting_engine.py
       - name: Persist encrypted delivery and opt-out state
-        if: ${{ always() && !inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret }}
+        if: ${{ always() && !inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
         run: |
           if [ ! -f runtime/prospecting-state.enc ]; then
             echo "No encrypted state file was created."
