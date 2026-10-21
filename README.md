@@ -9,8 +9,8 @@ Repository ini menjalankan discovery bisnis publik di Indonesia dan sejumlah pas
 3. Gemini memberi skor dan menulis pesan personal. Skor minimal 75 memenuhi syarat untuk email otomatis.
 4. Prospek baru dikirim ke endpoint dashboard dengan status queued dan ID stabil.
 5. Email yang diterima server SMTP memperbarui record ID yang sama menjadi sent.
-6. Inbox IMAP dipindai untuk balasan. Status replied dikirim ke dashboard agar tercipta lead CRM. Permintaan berhenti kontak mengubah status menjadi blocked dan menghentikan follow-up.
-7. Follow-up dijadwalkan sekitar hari ke-2, ke-5, dan ke-9. Jika inbox tidak bisa diperiksa, follow-up tidak dikirim.
+6. Inbox IMAP dipindai untuk balasan. Status `replied`, waktu balasan, dan cuplikan balasan dikirim ke dashboard; status `replied` otomatis masuk ke CRM. Permintaan berhenti kontak mengubah status menjadi `blocked` dan menghentikan follow-up.
+7. Follow-up pertama dijadwalkan 3 hari setelah email awal, lalu setiap 3 hari (hari ke-6 dan ke-9) sampai maksimal 3 follow-up. Jika penerima membalas atau meminta berhenti, follow-up dihentikan. Pengiriman baru dilakukan hanya jika SMTP dan IMAP siap agar balasan bisa dilacak ke dashboard.
 
 ## Gaya outreach dan pasar internasional
 
@@ -65,7 +65,7 @@ Untuk Gmail, gunakan App Password dan pastikan IMAP aktif. Jangan menaruh token,
 
 ## Pengaktifan pengiriman
 
-Pengiriman otomatis sengaja nonaktif saat migrasi. Setelah menambahkan secrets SMTP/IMAP dan memeriksa data queued di dashboard, buat Actions Variable bernama ENABLE_AUTO_EMAIL dengan nilai true. Set false untuk menjeda pengiriman.
+Pengiriman otomatis membutuhkan Actions Variable `ENABLE_AUTO_EMAIL=true` serta secrets SMTP dan IMAP yang valid. Sistem fail-closed: meskipun variabel aktif, tidak ada email yang dikirim bila konfigurasi SMTP/IMAP belum lengkap atau pemindaian inbox gagal. Balasan masuk ke dashboard/CRM saat thread email dapat dicocokkan.
 
 Scraping dan sinkronisasi ke dashboard tetap membutuhkan GEMINI_API_KEY dan INGEST_TOKEN.
 
@@ -73,6 +73,8 @@ Scraping dan sinkronisasi ke dashboard tetap membutuhkan GEMINI_API_KEY dan INGE
 
 - Maksimal 20 email otomatis per hari kalender WIB, termasuk follow-up.
 - Maksimal tiga percobaan pengiriman per record.
+- Maksimal tiga follow-up per penerima, pada hari ke-3, ke-6, dan ke-9.
+- Pengiriman ditahan sampai SMTP dan IMAP tersedia; hal ini memastikan respons bisa dibaca dan disinkronkan ke dashboard.
 - Batch antrean harus diterima dashboard sebelum sistem mengirim email.
 - Balasan dan opt-out menghentikan follow-up.
 - State serta counter tersimpan sebagai ciphertext pada runtime/prospecting-state.enc. File tersebut tidak menyimpan data kontak dalam bentuk teks biasa.

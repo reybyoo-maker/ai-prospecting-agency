@@ -46,6 +46,83 @@ class OutreachCopyTests(unittest.TestCase):
         self.assertGreaterEqual(len(international), 2)
         self.assertGreaterEqual(len(local), 2)
 
+
+    def test_prospect_copy_removes_automation_vendor_names(self):
+        body = engine.sanitize_prospect_copy("Kami membantu lewat otomasi menggunakan n8n.", "id")
+        self.assertNotIn("n8n", body.lower())
+        self.assertIn("otomasi", body.lower())
+
+    def test_follow_up_is_first_due_after_three_days(self):
+        from datetime import datetime, timedelta, timezone
+        first = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        entry = {
+            "status": "sent",
+            "first_sent_at": first.isoformat().replace("+00:00", "Z"),
+            "last_sent_at": first.isoformat().replace("+00:00", "Z"),
+            "followup_count": 0,
+        }
+        self.assertFalse(engine._followup_due(entry, first + timedelta(days=2)))
+        self.assertTrue(engine._followup_due(entry, first + timedelta(days=3)))
+
+    def test_follow_ups_repeat_every_three_days(self):
+        from datetime import datetime, timedelta, timezone
+        first = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        entry = {
+            "status": "sent",
+            "first_sent_at": first.isoformat().replace("+00:00", "Z"),
+            "last_sent_at": (first + timedelta(days=3)).isoformat().replace("+00:00", "Z"),
+            "followup_count": 1,
+        }
+        self.assertFalse(engine._followup_due(entry, first + timedelta(days=5)))
+        self.assertTrue(engine._followup_due(entry, first + timedelta(days=6)))
+
+    def test_outbound_email_is_paused_without_imap_reply_tracking(self):
+        with patch.object(engine, "ENABLE_AUTO_EMAIL", True), \
+             patch.object(engine, "_smtp_configured", return_value=True), \
+             patch.object(engine, "_imap_configured", return_value=False), \
+             patch.object(engine, "_send_entry") as send_entry:
+            state = {"send_day_wib": "", "sent_today": 0}
+            self.assertFalse(engine._attempt_send({"record": {"id": "web-0123456789abcdef01234567"}}, state, "Subject", "Body"))
+            send_entry.assert_not_called()
+
+    def test_reply_status_and_preview_are_synced_to_dashboard(self):
+        row = engine.dashboard_record({
+            "record": {"id": "web-0123456789abcdef01234567", "status": "sent", "message_preview": "Initial email"},
+            "status": "replied",
+            "replied_at": "2026-01-04T12:00:00Z",
+            "reply_preview": "Thanks, please send more details.",
+            "error": None,
+        })
+        self.assertEqual(row["status"], "replied")
+        self.assertEqual(row["replied_at"], "2026-01-04T12:00:00Z")
+        self.assertEqual(row["message_preview"], "Thanks, please send more details.")
+
+
+    def test_reply_headers_match_to_original_prospect(self):
+        from email.message import EmailMessage
+        lead_id = "web-0123456789abcdef01234567"
+        message = EmailMessage()
+        message["Subject"] = "Re: A practical workflow idea"
+        message["From"] = "contact@example.com"
+        message["In-Reply-To"] = "<original-message@example.com>"
+        message["References"] = "<original-message@example.com>"
+        state = {"records": {lead_id: {
+            "record": {"contact": "contact@example.com"},
+            "last_message_id": "<original-message@example.com>",
+        }}}
+        self.assertEqual(engine._message_lead_id(message, state), lead_id)
+
+    def test_sender_does_not_prefix_internal_lead_id_in_subject(self):
+        with patch.object(engine, "_smtp_configured", return_value=True), \
+             patch.object(engine, "SMTP_PORT", 465), \
+             patch.object(engine.smtplib, "SMTP_SSL") as smtp_ssl:
+            server = smtp_ssl.return_value.__enter__.return_value
+            entry = {"record": {"id": "web-0123456789abcdef01234567", "contact": "contact@example.com"}}
+            engine._send_email(entry, "A practical workflow idea", "Hello there")
+            sent_message = server.send_message.call_args.args[0]
+            self.assertEqual(str(sent_message["Subject"]), "A practical workflow idea")
+            self.assertNotIn("[AG-", str(sent_message["Subject"]))
+
     def test_followup_templates_have_real_line_breaks_and_new_brand(self):
         entry = {"record": {"name": "Example Company"}, "email_language": "en"}
         body = engine._followup_copy(entry, 0)
