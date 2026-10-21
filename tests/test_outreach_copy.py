@@ -47,6 +47,82 @@ class OutreachCopyTests(unittest.TestCase):
         self.assertGreaterEqual(len(local), 2)
 
 
+    def test_search_queries_include_independent_professionals(self):
+        with patch.dict(os.environ, {
+            "QUERIES_PER_RUN": "10",
+            "INDIVIDUAL_QUERY_RATIO": "0.40",
+        }):
+            queries = engine.search_queries()
+        self.assertEqual(len(queries), 10)
+        self.assertTrue(any(
+            token in q.lower()
+            for q in queries
+            for token in ("freelancer", "konsultan independen", "content creator", "coach", "solopreneur", "solo founder")
+        ))
+        self.assertTrue(any(engine.is_international_query(q) for q in queries))
+        self.assertTrue(any(not engine.is_international_query(q) for q in queries))
+
+    def test_extract_social_supports_public_professional_profiles(self):
+        self.assertEqual(
+            engine.extract_social("Work samples: https://github.com/example-person/projects."),
+            "https://github.com/example-person/projects",
+        )
+        self.assertEqual(
+            engine.extract_social("Profile: https://www.threads.net/@example-person"),
+            "https://www.threads.net/@example-person",
+        )
+
+    def test_social_pages_are_not_crawled_for_hidden_contact_details(self):
+        self.assertTrue(engine.is_social_url("https://github.com/example-person"))
+        self.assertTrue(engine.is_social_url("https://x.com/example-person"))
+        self.assertFalse(engine.is_social_url("https://example.com/contact"))
+
+    def test_direct_fallback_parses_public_search_results(self):
+        class Response:
+            status_code = 200
+            text = (
+                '<html><body><a href="https://independent.example.com/contact">'
+                '<h3>Independent consultant workflow services</h3></a></body></html>'
+            )
+
+        with patch.dict(os.environ, {
+            "BRAVE_SEARCH_API_KEY": "",
+            "SEARXNG_BASE_URLS": "",
+            "DIRECT_SEARCH_PROVIDERS_PER_QUERY": "1",
+            "DIRECT_SEARCH_TIMEOUT": "4",
+        }), patch.object(engine.requests, "get", return_value=Response()):
+            results, source = engine.direct_html_search('"freelancer" "Bandung" automation')
+        self.assertEqual(source, "google_html")
+        self.assertTrue(any("independent.example.com/contact" in r["href"] for r in results))
+        self.assertTrue(any("Independent consultant" in r["title"] for r in results))
+
+    def test_search_fallback_merges_results_from_multiple_backends(self):
+        class FakeDDGS:
+            def text(self, query, **kwargs):
+                backend = kwargs["backend"]
+                if backend == "google":
+                    return [{"title": f"Google {i}", "href": f"https://google-result-{i}.example/"} for i in range(3)]
+                if backend == "brave":
+                    return [{"title": f"Brave {i}", "href": f"https://brave-result-{i}.example/"} for i in range(2)]
+                return []
+
+        with patch.dict(os.environ, {
+            "SEARCH_BACKENDS": "google,brave,bing",
+            "SEARCH_DDGS_BACKENDS_PER_QUERY": "2",
+            "DIRECT_SEARCH_MIN_RESULTS": "1",
+        }):
+            results, source = engine.search_with_fallback(FakeDDGS(), "freelancer workflow")
+        self.assertEqual(len(results), 5)
+        self.assertIn("google", source)
+        self.assertIn("brave", source)
+
+    def test_apify_public_profile_enrichment_is_opt_in(self):
+        with patch.object(engine, "APIFY_ENRICHMENT_ENABLED", False), \
+             patch.object(engine.requests, "post") as post:
+            leads = [{"search_title": "Independent Consultant", "social_url": ""}]
+            self.assertEqual(engine.enrich_social_profiles(leads), leads)
+            post.assert_not_called()
+
     def test_prospect_copy_removes_automation_vendor_names(self):
         body = engine.sanitize_prospect_copy("Kami membantu lewat otomasi menggunakan n8n.", "id")
         self.assertNotIn("n8n", body.lower())
