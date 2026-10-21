@@ -1,38 +1,25 @@
-# Sales Engine
+# Sales Engine — Dashboard Scraping
 
-## Objective
-Run prospect discovery and outbound sales on a fixed 2-hour cadence without manual sending.
+## Alur produksi
 
-## Runtime flow
-1. GitHub Actions starts every 2 hours.
-2. `prospecting_engine.py` discovers public business emails, enriches evidence, scores each candidate with Gemini, and ingests only valid leads into Google Sheets.
-3. The same workflow calls Apps Script `sales_cycle`.
-4. Apps Script first scans inbound replies so replied leads are excluded from later follow-ups.
-5. Apps Script sends up to 30 new `READY` initial emails, highest score first.
-6. Apps Script processes due follow-ups with the remaining email quota.
-7. The state is recorded in `Prospects`.
+1. GitHub Actions berjalan setiap 2 jam.
+2. prospecting_engine.py menemukan bisnis dari web publik, memvalidasi email publik, memperkaya evidence, lalu memberi skor dengan Gemini.
+3. Prospek baru di-upsert melalui POST /api/ingest/scrape pada AIGROWTH Owner Dashboard.
+4. Sistem baru mengirim email setelah record queued berhasil disinkronkan. Status setelah SMTP menerima pesan berubah menjadi sent.
+5. Inbox IMAP dipindai sebelum follow-up. Balasan memperbarui record ID yang sama menjadi replied, sehingga dashboard membuat lead CRM. Balasan opt-out menjadi blocked.
+6. Follow-up dijadwalkan sekitar hari ke-2, ke-5, dan ke-9. Jika pemeriksaan inbox gagal, follow-up dilewati.
+7. Status yang digunakan: queued, sent, replied, failed, blocked. Status delivered atau read hanya dicatat jika benar-benar dikonfirmasi provider.
 
-## Lead lifecycle
-`READY -> SENT -> FOLLOWUP_1 -> FOLLOWUP_2 -> FOLLOWUP_3 -> FOLLOWUP_DONE`
+## Pengendalian
 
-Reply:
-`SENT/FOLLOWUP_* -> WA_HANDOFF`
+- ID HMAC email stabil antar-run tanpa mengekspos alamat email di ID.
+- Batch scraping harus diterima dashboard sebelum email dikirim.
+- Maksimal 20 pengiriman otomatis per hari WIB, termasuk follow-up.
+- Maksimal tiga percobaan per record.
+- Balasan atau opt-out menghentikan follow-up.
+- SMTP secrets diperlukan untuk mengirim email; IMAP diperlukan untuk deteksi balasan dan follow-up.
+- Counter dan riwayat tersimpan terenkripsi di runtime/prospecting-state.enc. Jangan mengganti INGEST_TOKEN saat state masih dipakai.
 
-Opt-out:
-`any active status -> OPTOUT`
+## Batas integrasi
 
-## Sending safeguards
-- Public email required.
-- Duplicate email suppressed at ingestion.
-- `UNSUBSCRIBE` stops future follow-ups.
-- Per-row attempts are bounded.
-- Document lock protects concurrent sends.
-- Subject contains a stable Lead ID.
-- MailApp remaining quota is checked before sending.
-- A run never intentionally bypasses Google sending limits.
-
-## Cadence
-GitHub Actions uses POSIX cron for the 2-hour schedule. Scheduled runs can be delayed by GitHub during high system load; the cadence is therefore a target interval, not a second-precise guarantee.
-
-## Google account capacity
-The system targets 30 initial outreach emails per cycle. Actual volume is capped by the Google account's remaining MailApp quota. Consumer Apps Script accounts currently have 100 email recipients/day; Google Workspace currently has 1,500 recipients/day. These quotas are platform limits and can change.
+Repository ini mengirim data ke endpoint dashboard yang diberikan. Source code dashboard tidak berada di repository ini, jadi perubahan frontend/backend dashboard tidak dilakukan di sini.
