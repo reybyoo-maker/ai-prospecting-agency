@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      inspect_worker_auth:
+        description: "Read Worker source and report only ingest-auth code snippets; does not scrape or email"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "17 */2 * * *"
 
@@ -29,14 +34,70 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Inspect dashboard Worker ingest auth (read-only)
+        if: ${{ inputs.inspect_worker_auth }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, re, sys, requests
+          account = "4930c889e124c72813dfad52aa3ea507"
+          worker = "aigrowth-owner-dashboard"
+          url = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/{worker}/content/v2"
+          token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+          if not token:
+              print("SOURCE_READ_FAILED: CLOUDFLARE_API_TOKEN secret is missing or unavailable to this workflow.")
+              sys.exit(0)
+          try:
+              response = requests.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/javascript"}, timeout=30)
+          except Exception as exc:
+              print("SOURCE_READ_FAILED:", type(exc).__name__)
+              sys.exit(0)
+          print("CLOUDFLARE_SOURCE_HTTP", response.status_code)
+          print("CONTENT_TYPE", response.headers.get("content-type", "unknown").split(";")[0])
+          if not response.ok:
+              try:
+                  data = response.json()
+                  for error in data.get("errors", [])[:3]:
+                      print("CLOUDFLARE_API_ERROR", error.get("code"), str(error.get("message", ""))[:240])
+              except Exception:
+                  print("SOURCE_READ_FAILED: response body omitted")
+              sys.exit(0)
+          source = response.content.decode("utf-8", errors="replace")
+          # Print only source contexts relevant to auth; never print request headers or secret values.
+          source = re.sub(r'(?i)(authorization\s*[:=]\s*["\']?(?:bearer\s+)?)[A-Za-z0-9._~+/-]{16,}', r'\1[REDACTED]', source)
+          source = re.sub(r'(?i)((?:token|secret|password|api[_-]?key)\s*[:=]\s*["\'])[^\"\']{8,}(["\'])', r'\1[REDACTED]\2', source)
+          needles = ["Token tidak valid", "INGEST_TOKEN", "DASHBOARD_INGEST_TOKEN", "api/ingest/scrape", "ingest/scrape", "Authorization"]
+          windows = []
+          for needle in needles:
+              start = 0
+              while len(windows) < 10:
+                  idx = source.lower().find(needle.lower(), start)
+                  if idx < 0:
+                      break
+                  lo, hi = max(0, idx - 420), min(len(source), idx + len(needle) + 620)
+                  snippet = source[lo:hi].replace("\r", " ").replace("\n", " ")
+                  if not any(snippet == old for old in windows):
+                      windows.append(snippet)
+                  start = idx + len(needle)
+              if len(windows) >= 10:
+                  break
+          print("SOURCE_BYTES", len(response.content))
+          print("AUTH_MATCH_COUNT", len(windows))
+          for i, snippet in enumerate(windows, 1):
+              print(f"--- AUTH_CONTEXT_{i} ---")
+              print(snippet[:1100])
+          if not windows:
+              print("No auth terms found; content response may be a multipart wrapper or bundle with different names.")
+          PY
       - name: Diagnose dashboard auth with empty payload only
-        if: ${{ inputs.diagnose_auth }}
+        if: ${{ inputs.diagnose_auth && !inputs.inspect_worker_auth }}
         env:
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
           DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
         run: python scripts/diagnose_dashboard_auth.py
       - name: Scrape, score, and ingest directly into the dashboard
-        if: ${{ !inputs.diagnose_auth }}
+        if: ${{ !inputs.diagnose_auth && !inputs.inspect_worker_auth }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
@@ -64,7 +125,7 @@ jobs:
           SEARCH_TIMEOUT: "25"
         run: python prospecting_engine.py
       - name: Persist encrypted delivery and opt-out state
-        if: ${{ always() && !inputs.diagnose_auth }}
+        if: ${{ always() && !inputs.diagnose_auth && !inputs.inspect_worker_auth }}
         run: |
           if [ ! -f runtime/prospecting-state.enc ]; then
             echo "No encrypted state file was created."
