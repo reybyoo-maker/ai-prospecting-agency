@@ -153,7 +153,7 @@ def add_portfolio_offer(body, language="id"):
         if not any(x in low for x in ("free workflow audit", "free audit", "free consultation", "complimentary audit")):
             additions.append("I’d be happy to offer a free, no-obligation workflow audit and consultation.")
         if not any(x in low for x in ("operating cost", "headcount", "manual hours", "repetitive task", "repetitive work", "lower-cost")):
-            additions.append("For repetitive work, automation can be a lower-cost option than adding manual hours and may reduce operating costs; actual savings depend on the workflow.")
+            additions.append("For suitable repetitive tasks, automation may cost less than hiring additional staff or paying overtime; actual savings depend on the workflow.")
         if PORTFOLIO_URL.lower() not in low:
             additions.append("Portfolio: " + PORTFOLIO_URL)
         if INSTAGRAM_HANDLE.lower() not in low:
@@ -166,7 +166,7 @@ def add_portfolio_offer(body, language="id"):
         if not any(x in low for x in ("audit gratis", "konsultasi gratis", "konsultasi awal gratis", "audit workflow gratis")):
             additions.append("Saya juga menawarkan audit workflow dan konsultasi awal gratis, tanpa komitmen.")
         if not any(x in low for x in ("hemat biaya", "biaya operasional", "pekerjaan berulang", "tugas repetitif", "jam kerja manual", "tenaga kerja manual")):
-            additions.append("Untuk tugas berulang, otomasi bisa lebih hemat daripada menambah jam kerja manual; hasilnya bergantung pada alur kerja.")
+            additions.append("Untuk tugas berulang tertentu, otomasi bisa lebih hemat daripada menambah karyawan atau membayar lembur; hasilnya bergantung pada alur kerja.")
         if PORTFOLIO_URL.lower() not in low:
             additions.append("Portofolio: " + PORTFOLIO_URL)
         if INSTAGRAM_HANDLE.lower() not in low:
@@ -756,7 +756,8 @@ def _send_email(entry, subject, body):
         raise RuntimeError("SMTP credentials are not configured.")
     lead_id = entry["record"]["id"]
     message = EmailMessage()
-    message["Subject"] = ("[AG-" + lead_id + "] " + str(subject or "Tindak lanjut"))[:250]
+    # Keep the recipient-facing subject clean; thread references/Message-ID are used for reply matching.
+    message["Subject"] = str(subject or "Tindak lanjut")[:220]
     message["From"] = formataddr((AGENCY_NAME, SMTP_FROM))
     message["To"] = entry["record"]["contact"]
     message["Reply-To"] = SMTP_REPLY_TO or SMTP_FROM
@@ -956,7 +957,7 @@ def _followup_copy(entry, stage):
         return (
             "Hi " + name + " team,\n\n" + opening + "\n\n"
             "I can offer a free, no-obligation workflow audit to spot ways to save manual time and operating costs. "
-            "For suitable repetitive tasks, automation may be more cost-effective than adding manual hours.\n\n"
+            "For suitable repetitive tasks, automation may cost less than hiring additional staff or paying overtime; actual savings depend on the workflow.\n\n"
             "Portfolio: " + PORTFOLIO_URL + "\n"
             "Instagram: " + INSTAGRAM_HANDLE + " (" + INSTAGRAM_URL + ")\n\n"
             "If this isn’t relevant, reply UNSUBSCRIBE and I won’t contact you again.\n\n"
@@ -971,7 +972,7 @@ def _followup_copy(entry, stage):
     return (
         "Halo tim " + name + ",\n\n" + opening + "\n\n"
         "Saya menawarkan audit workflow dan konsultasi awal gratis untuk mencari peluang menghemat waktu kerja manual dan biaya operasional. "
-        "Untuk pekerjaan repetitif tertentu, otomasi bisa lebih hemat dibanding menambah jam kerja manual.\n\n"
+        "Untuk pekerjaan repetitif tertentu, otomasi bisa lebih hemat dibanding menambah karyawan atau membayar lembur.\n\n"
         "Portofolio: " + PORTFOLIO_URL + "\n"
         "Instagram: " + INSTAGRAM_HANDLE + " (" + INSTAGRAM_URL + ")\n\n"
         "Jika email ini tidak relevan, balas UNSUBSCRIBE dan saya tidak akan menghubungi lagi.\n\n"
