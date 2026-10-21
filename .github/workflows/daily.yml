@@ -29,13 +29,13 @@ jobs:
           INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
           DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
           GEMINI_MODEL: "gemini-3.5-flash-lite"
-          MAX_PER_RUN: "80"
-          MAX_AI_PER_RUN: "60"
+          MAX_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '12' || '80' }}
+          MAX_AI_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '5' || '60' }}
           MAX_DAILY_SENDS: "20"
-          MAX_SENDS_PER_RUN: "20"
+          MAX_SENDS_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '0' || '20' }}
           MIN_SCORE_TO_SEND: "75"
           CAMPAIGN_NAME: "aigrowth-prospecting"
-          ENABLE_AUTO_EMAIL: ${{ vars.ENABLE_AUTO_EMAIL || 'false' }}
+          ENABLE_AUTO_EMAIL: ${{ github.event_name == 'workflow_dispatch' && 'false' || vars.ENABLE_AUTO_EMAIL || 'false' }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -47,7 +47,7 @@ jobs:
           IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
           IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
           SEARCH_BACKENDS: "google,brave,bing,duckduckgo"
-          QUERIES_PER_RUN: "24"
+          QUERIES_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '3' || '24' }}
           SEARCH_TIMEOUT: "25"
         run: python prospecting_engine.py
       - name: Persist encrypted delivery and opt-out state
