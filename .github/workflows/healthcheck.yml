@@ -1,15 +1,7 @@
-name: Sonjaya Connection Healthcheck
+name: AIGROWTH Dashboard Integration Healthcheck
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/healthcheck.yml"
-      - "apps-script/Code.gs"
-      - "healthcheck.py"
-      - "requirements.txt"
 
 permissions:
   contents: read
@@ -18,16 +10,23 @@ jobs:
   health:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Check Google Sheet webhook and Gemini
+      - name: Check dashboard availability and Gemini configuration
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
           GEMINI_MODEL: "gemini-3.5-flash-lite"
-          EXPECTED_APPS_SCRIPT_VERSION: "2026-10-21.1"
+          ENABLE_AUTO_EMAIL: ${{ vars.ENABLE_AUTO_EMAIL || 'false' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
         run: python healthcheck.py
