@@ -999,6 +999,9 @@ def run():
                     continue
                 new_entry["attempts"] = int(previous.get("attempts") or 0)
                 new_entry["followup_count"] = int(previous.get("followup_count") or 0)
+                if new_entry["attempts"] >= 3:
+                    new_entry["status"] = "failed"
+                    new_entry["error"] = previous.get("error")
                 state["records"][lead_id] = new_entry
             else:
                 state["records"][lead_id] = new_entry
