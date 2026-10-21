@@ -1,27 +1,53 @@
 from __future__ import annotations
-import hashlib, os, re, time, json
+import base64, email, hashlib, hmac, imaplib, json, os, re, smtplib, ssl, time
 from datetime import datetime, timezone, timedelta
+from email.message import EmailMessage
+from email.policy import default
+from email.utils import formataddr, make_msgid, parsedate_to_datetime, parseaddr
+from pathlib import Path
 from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
+from cryptography.fernet import Fernet, InvalidToken
 from ddgs import DDGS
 from google import genai
 from google.genai import types
 from service_catalog import catalog_text, SERVICES
 
 WIB = timezone(timedelta(hours=7))
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-SHEET_WEBHOOK_URL = os.environ["SHEET_WEBHOOK_URL"]
-WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
-MAX_PER_RUN = int(os.getenv("MAX_PER_RUN", "60"))
-MAX_AI_PER_RUN = int(os.getenv("MAX_AI_PER_RUN", "40"))
+DASHBOARD_INGEST_URL = os.getenv(
+    "DASHBOARD_INGEST_URL",
+    "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape",
+).strip()
+INGEST_TOKEN = os.getenv("INGEST_TOKEN", "").strip()
+MAX_PER_RUN = int(os.getenv("MAX_PER_RUN") or "80")
+MAX_AI_PER_RUN = int(os.getenv("MAX_AI_PER_RUN") or "60")
+MAX_DAILY_SENDS = int(os.getenv("MAX_DAILY_SENDS") or "20")
+MAX_SENDS_PER_RUN = int(os.getenv("MAX_SENDS_PER_RUN") or "20")
+MIN_SCORE_TO_SEND = int(os.getenv("MIN_SCORE_TO_SEND") or "75")
+ENABLE_AUTO_EMAIL = os.getenv("ENABLE_AUTO_EMAIL", "false").strip().lower() in ("1", "true", "yes", "on")
+CAMPAIGN_NAME = os.getenv("CAMPAIGN_NAME", "aigrowth-prospecting").strip()
+STATE_PATH = Path(os.getenv("PROSPECTING_STATE_PATH", "runtime/prospecting-state.enc"))
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT") or "465")
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+SMTP_FROM = (os.getenv("SMTP_FROM") or SMTP_USERNAME).strip()
+SMTP_REPLY_TO = (os.getenv("SMTP_REPLY_TO") or SMTP_FROM).strip()
+IMAP_HOST = (os.getenv("IMAP_HOST") or "imap.gmail.com").strip()
+IMAP_PORT = int(os.getenv("IMAP_PORT") or "993")
+IMAP_USERNAME = (os.getenv("IMAP_USERNAME") or SMTP_USERNAME).strip()
+IMAP_PASSWORD = (os.getenv("IMAP_PASSWORD") or SMTP_PASSWORD).strip()
+AGENCY_NAME = "Sonjaya Remote Business Services"
 SEARCH_BACKENDS = os.getenv("SEARCH_BACKENDS", "google,brave,bing,duckduckgo").strip()
-SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", "25"))
-QUERY_PAUSE = float(os.getenv("QUERY_PAUSE", "0.6"))
+SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT") or "25")
+QUERY_PAUSE = float(os.getenv("QUERY_PAUSE") or "0.6")
 CONTACT_PATHS = ("/contact", "/kontak", "/hubungi-kami", "/hubungi", "/about", "/tentang-kami", "/tentang")
-MAX_CRAWL_PER_QUERY = int(os.getenv("MAX_CRAWL_PER_QUERY", "2"))
-MAX_EMAIL_RESULTS_PER_QUERY = int(os.getenv("MAX_EMAIL_RESULTS_PER_QUERY", "6"))
+MAX_CRAWL_PER_QUERY = int(os.getenv("MAX_CRAWL_PER_QUERY") or "2")
+MAX_EMAIL_RESULTS_PER_QUERY = int(os.getenv("MAX_EMAIL_RESULTS_PER_QUERY") or "6")
+PHONE_RE = re.compile(r"(?<!\w)(?:\+?62|0)(?:[\s().-]*\d){8,14}(?!\w)")
 
 
 CITIES = [
@@ -187,6 +213,17 @@ def extract_social(text):
         re.I
     )
     return m.group(0) if m else ""
+
+def extract_phone(text):
+    """Extract a likely public business phone number from scraped evidence."""
+    for match in PHONE_RE.findall(str(text or "")):
+        digits = re.sub(r"\D", "", match)
+        if digits.startswith("62") and len(digits) >= 10:
+            return "+" + digits
+        if digits.startswith("0") and 9 <= len(digits) <= 14:
+            return digits
+    return ""
+
 
 def search_queries():
     now=datetime.now(WIB)
@@ -391,73 +428,612 @@ Return JSON only.
             time.sleep(3*(attempt+1))
     raise RuntimeError(str(last))
 
-def sheet_call(action,**payload):
-    last_error=None
-    for attempt in range(3):
-        try:
-            r=requests.post(
-                SHEET_WEBHOOK_URL,
-                json={"token":WEBHOOK_TOKEN,"action":action,**payload},
-                timeout=90
-            )
-            if r.status_code == 404:
-                raise RuntimeError(
-                    "SHEET_WEBHOOK_404: Google Apps Script Web App URL in GitHub Secret "
-                    "is unavailable. Update SHEET_WEBHOOK_URL with the current /exec deployment URL."
-                )
-            if r.status_code in (429,500,502,503,504):
-                last_error=RuntimeError(f"Sheets HTTP {r.status_code}")
-                time.sleep(2*(attempt+1))
-                continue
-            r.raise_for_status()
-            data=r.json()
-            if not data.get("ok"):
-                raise RuntimeError(data.get("error","Sheets action failed"))
-            return data
-        except Exception as e:
-            last_error=e
-            if attempt < 2:
-                time.sleep(2*(attempt+1))
-                continue
-            raise last_error
+def make_id(email_address):
+    """Stable opaque ID: HMAC prevents exposing a raw email in dashboard IDs."""
+    if not INGEST_TOKEN or INGEST_TOKEN == "INGEST_TOKEN":
+        raise RuntimeError("Set a real INGEST_TOKEN in GitHub Actions Secrets.")
+    digest = hmac.new(
+        INGEST_TOKEN.encode("utf-8"),
+        str(email_address).strip().lower().encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:24]
+    return "web-" + digest
 
-def make_id(email):
-    return hashlib.sha1(email.lower().encode()).hexdigest()[:12]
+
+def _state_cipher():
+    if not INGEST_TOKEN or INGEST_TOKEN == "INGEST_TOKEN":
+        raise RuntimeError("INGEST_TOKEN is required to encrypt the local state.")
+    material = hashlib.sha256(
+        b"aigrowth-prospecting-state-v1:" + INGEST_TOKEN.encode("utf-8")
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(material))
+
+
+def _today_wib():
+    return datetime.now(WIB).date().isoformat()
+
+
+def load_state():
+    state = {
+        "version": 1,
+        "send_day_wib": _today_wib(),
+        "sent_today": 0,
+        "records": {},
+        "pending_sync": {},
+        "processed_reply_uids": [],
+    }
+    if STATE_PATH.exists():
+        try:
+            encrypted = STATE_PATH.read_bytes()
+            loaded = json.loads(_state_cipher().decrypt(encrypted).decode("utf-8"))
+            if not isinstance(loaded, dict) or loaded.get("version") != 1:
+                raise RuntimeError("Unsupported encrypted state format.")
+            state.update(loaded)
+        except InvalidToken as exc:
+            raise RuntimeError(
+                "Cannot decrypt runtime/prospecting-state.enc. Keep INGEST_TOKEN stable; "
+                "sending is stopped to avoid duplicates."
+            ) from exc
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Encrypted prospecting state is unreadable; no sends attempted.") from exc
+
+    state.setdefault("records", {})
+    state.setdefault("pending_sync", {})
+    state.setdefault("processed_reply_uids", [])
+    if state.get("send_day_wib") != _today_wib():
+        state["send_day_wib"] = _today_wib()
+        state["sent_today"] = 0
+    state["sent_today"] = max(0, int(state.get("sent_today") or 0))
+    return state
+
+
+def save_state(state):
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        state, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    STATE_PATH.write_bytes(_state_cipher().encrypt(payload))
+
+
+def dashboard_record(entry):
+    record = dict(entry.get("record") or {})
+    record["status"] = str(entry.get("status") or "queued").lower()
+    record["sent_at"] = entry.get("sent_at")
+    record["replied_at"] = entry.get("replied_at")
+    record["error"] = (str(entry.get("error") or "")[:400] or None)
+    if record["status"] in ("replied", "blocked") and entry.get("reply_preview"):
+        record["message_preview"] = str(entry["reply_preview"])[:500]
+    elif entry.get("last_message_preview"):
+        record["message_preview"] = str(entry["last_message_preview"])[:500]
+    else:
+        record["message_preview"] = str(record.get("message_preview") or "")[:500]
+    return record
+
+
+def queue_dashboard_sync(state, lead_id):
+    state["pending_sync"][lead_id] = dashboard_record(state["records"][lead_id])
+    save_state(state)
+
+
+def dashboard_post_records(records):
+    if not records:
+        return
+    if not INGEST_TOKEN:
+        raise RuntimeError("Missing INGEST_TOKEN.")
+    headers = {
+        "Authorization": "Bearer " + INGEST_TOKEN,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    for start in range(0, len(records), 50):
+        batch = records[start:start + 50]
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    DASHBOARD_INGEST_URL,
+                    headers=headers,
+                    json={"records": batch},
+                    timeout=30,
+                )
+                if response.status_code == 429 or response.status_code >= 500:
+                    last_error = RuntimeError("Dashboard ingest HTTP " + str(response.status_code))
+                    if attempt < 2:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    raise last_error
+                response.raise_for_status()
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                if isinstance(data, dict) and data.get("ok") is False:
+                    raise RuntimeError("Dashboard rejected a scraping batch.")
+                print("DASHBOARD_INGEST_OK", len(batch), "HTTP", response.status_code)
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise RuntimeError(
+                    "Dashboard ingest failed after retries: "
+                    + type(last_error).__name__ + ": " + str(last_error)
+                ) from last_error
+
+
+def sync_pending(state):
+    pending = state.get("pending_sync") or {}
+    if not pending:
+        return 0
+    items = list(pending.items())
+    synced = 0
+    for start in range(0, len(items), 50):
+        batch_items = items[start:start + 50]
+        dashboard_post_records([row for _, row in batch_items])
+        for lead_id, _ in batch_items:
+            state["pending_sync"].pop(lead_id, None)
+            synced += 1
+        save_state(state)
+    return synced
+
+
+def _platform_and_handle(social_url, website_url):
+    selected = social_url or website_url or ""
+    host = urlparse(selected).netloc.lower().split("@")[-1].split(":")[0]
+    host = host[4:] if host.startswith("www.") else host
+    platform = "website"
+    for domain, label in (
+        ("instagram.com", "instagram"),
+        ("facebook.com", "facebook"),
+        ("tiktok.com", "tiktok"),
+        ("linkedin.com", "linkedin"),
+        ("youtube.com", "youtube"),
+        ("x.com", "x"),
+        ("twitter.com", "x"),
+    ):
+        if host == domain or host.endswith("." + domain):
+            platform = label
+            break
+    if social_url:
+        parts = [part for part in urlparse(social_url).path.split("/") if part]
+        ignored = {"p", "reel", "reels", "stories", "company", "in", "user", "profile"}
+        candidate = next((part for part in parts if part.lower() not in ignored), "")
+        handle = "@" + candidate.lstrip("@") if candidate else ("@" + host if host else "")
+        return platform, handle
+    return platform, host or ""
+
+
+def _smtp_configured():
+    return bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM)
+
+
+def _imap_configured():
+    return bool(IMAP_HOST and IMAP_USERNAME and IMAP_PASSWORD)
+
+
+def _send_email(entry, subject, body):
+    if not _smtp_configured():
+        raise RuntimeError("SMTP credentials are not configured.")
+    lead_id = entry["record"]["id"]
+    message = EmailMessage()
+    message["Subject"] = ("[AG-" + lead_id + "] " + str(subject or "Tindak lanjut"))[:250]
+    message["From"] = formataddr((AGENCY_NAME, SMTP_FROM))
+    message["To"] = entry["record"]["contact"]
+    message["Reply-To"] = SMTP_REPLY_TO or SMTP_FROM
+    message["Message-ID"] = make_msgid()
+    message.set_content(str(body or "").strip())
+
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(
+            SMTP_HOST, SMTP_PORT, timeout=30,
+            context=ssl.create_default_context()
+        ) as server:
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(message)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(message)
+    return str(message["Message-ID"])
+
+
+def _decode_message_text(message):
+    chunks = []
+    parts = message.walk() if message.is_multipart() else [message]
+    for part in parts:
+        if part.get_content_type() != "text/plain" or part.get_content_disposition() == "attachment":
+            continue
+        try:
+            content = part.get_payload(decode=True)
+            if content is None:
+                content = str(part.get_payload() or "").encode("utf-8", errors="replace")
+            chunks.append(content.decode(part.get_content_charset() or "utf-8", errors="replace"))
+        except Exception:
+            continue
+    text = "\n".join(chunks).strip()
+    for separator in (
+        "\nOn ", "\nPada ", "\nFrom:", "\n-----Original Message-----",
+        "\nDari:", "\n> ",
+    ):
+        if separator in text:
+            text = text.split(separator, 1)[0]
+    return re.sub(r"\s+", " ", text).strip()[:1200]
+
+
+def _message_lead_id(message, state):
+    subject = str(message.get("Subject") or "")
+    match = re.search(r"\[AG-(web-[0-9a-f]{24})\]", subject, re.I)
+    if match and match.group(1) in state.get("records", {}):
+        lead_id = match.group(1)
+    else:
+        lead_id = ""
+    if not lead_id:
+        references = " ".join((
+            str(message.get("In-Reply-To") or ""),
+            str(message.get("References") or ""),
+        ))
+        if references:
+            for candidate_id, entry in state.get("records", {}).items():
+                message_id = str(entry.get("last_message_id") or "")
+                if message_id and message_id in references:
+                    lead_id = candidate_id
+                    break
+    if not lead_id:
+        return ""
+    sender = parseaddr(str(message.get("From") or ""))[1].strip().lower()
+    expected = str(state["records"][lead_id].get("record", {}).get("contact") or "").strip().lower()
+    if not sender or sender != expected:
+        return ""
+    return lead_id
+
+
+def scan_replies(state):
+    """Return True only if the IMAP inbox scan succeeds."""
+    if not _imap_configured():
+        print("REPLY_SCAN_DISABLED", "IMAP credentials not configured")
+        return False
+    mailbox = None
+    try:
+        mailbox = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        mailbox.login(IMAP_USERNAME, IMAP_PASSWORD)
+        status, _ = mailbox.select("INBOX")
+        if status != "OK":
+            raise RuntimeError("Could not open IMAP INBOX.")
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%d-%b-%Y")
+        status, search_data = mailbox.uid("search", None, "SINCE", since)
+        if status != "OK":
+            raise RuntimeError("IMAP message search failed.")
+        uids = (search_data[0] or b"").split()[-500:]
+        processed = set(str(uid) for uid in state.get("processed_reply_uids", []))
+        replies_found = 0
+        for uid in uids:
+            uid_text = uid.decode("ascii", errors="ignore")
+            if uid_text in processed:
+                continue
+            status, fetched = mailbox.uid("fetch", uid, "(RFC822)")
+            if status != "OK" or not fetched:
+                continue
+            raw = next(
+                (part[1] for part in fetched if isinstance(part, tuple) and isinstance(part[1], bytes)),
+                None,
+            )
+            if not raw:
+                continue
+            message = email.message_from_bytes(raw, policy=default)
+            lead_id = _message_lead_id(message, state)
+            if not lead_id:
+                continue
+            entry = state["records"][lead_id]
+            if entry.get("status") in ("replied", "blocked"):
+                mailbox.uid("store", uid, "+FLAGS", r"(\Seen)")
+                processed.add(uid_text)
+                continue
+
+            preview = _decode_message_text(message) or "(Balasan email diterima)"
+            try:
+                received = parsedate_to_datetime(str(message.get("Date") or ""))
+                if received.tzinfo is None:
+                    received = received.replace(tzinfo=timezone.utc)
+                date_value = received.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            except Exception:
+                date_value = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+            entry["reply_preview"] = preview[:500]
+            entry["error"] = None
+            if re.search(r"\b(unsubscribe|stop|jangan hubungi|berhenti kirim|hapus kontak)\b", preview, re.I):
+                entry["status"] = "blocked"
+                entry["replied_at"] = None
+                entry["blocked_at"] = date_value
+                entry["last_message_preview"] = preview[:500]
+                print("OPT_OUT_RECEIVED", lead_id)
+            else:
+                entry["status"] = "replied"
+                entry["replied_at"] = date_value
+                entry["last_message_preview"] = preview[:500]
+                print("REPLY_RECEIVED", lead_id)
+            queue_dashboard_sync(state, lead_id)
+            mailbox.uid("store", uid, "+FLAGS", r"(\Seen)")
+            processed.add(uid_text)
+            replies_found += 1
+        state["processed_reply_uids"] = list(processed)[-3000:]
+        save_state(state)
+        sync_pending(state)
+        print("REPLY_SCAN_OK", "matched", replies_found)
+        return True
+    except Exception as exc:
+        print("REPLY_SCAN_ERROR", type(exc).__name__, str(exc)[:250])
+        return False
+    finally:
+        if mailbox is not None:
+            try:
+                mailbox.logout()
+            except Exception:
+                pass
+
+
+def _utc_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _followup_due(entry, now):
+    count = int(entry.get("followup_count") or 0)
+    if count >= 3 or entry.get("status") != "sent":
+        return False
+    first = _utc_datetime(entry.get("first_sent_at"))
+    last = _utc_datetime(entry.get("last_sent_at"))
+    if first is None:
+        return False
+    target_days = (2, 5, 9)
+    target = first + timedelta(days=target_days[count])
+    minimum_gap = (0, 3, 4)[count]
+    if last is not None and minimum_gap:
+        target = max(target, last + timedelta(days=minimum_gap))
+    return now >= target
+
+
+def _followup_copy(entry, stage):
+    name = str(entry.get("record", {}).get("name") or "tim")
+    if stage == 0:
+        opening = "Saya menindaklanjuti email sebelumnya tentang kemungkinan otomasi workflow untuk membantu proses operasional yang berulang."
+    elif stage == 1:
+        opening = "Saya ingin memastikan email sebelumnya tidak terlewat. Jika relevan, saya bisa mengirim contoh alur otomasi singkat yang sesuai dengan kebutuhan bisnis."
+    else:
+        opening = "Ini tindak lanjut terakhir dari saya. Jika saat ini belum dibutuhkan, tidak masalah dan saya tidak akan mengirim tindak lanjut berikutnya."
+    return (
+        "Halo " + name + ",\n\n" + opening + "\n\n"
+        + AUTOMATION_OFFER + "\n\n"
+        + "Portofolio: " + PORTFOLIO_URL + "\n\n"
+        + "Jika email ini tidak relevan, balas UNSUBSCRIBE dan kami tidak akan menghubungi lagi.\n\n"
+        + "Salam,\nRey\nSonjaya Remote Business Services"
+    )
+
+
+def _send_entry(entry, state, subject, body, is_followup=False):
+    lead_id = entry["record"]["id"]
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    message_id = _send_email(entry, subject, body)
+    entry["last_message_id"] = message_id
+    entry["last_sent_at"] = now
+    entry["last_message_preview"] = str(body or "")[:500]
+    entry["error"] = None
+    entry["status"] = "sent"
+    if not entry.get("first_sent_at"):
+        entry["first_sent_at"] = now
+        entry["sent_at"] = now
+        entry["followup_count"] = 0
+    elif is_followup:
+        entry["followup_count"] = int(entry.get("followup_count") or 0) + 1
+    state["sent_today"] = int(state.get("sent_today") or 0) + 1
+    state["send_day_wib"] = _today_wib()
+    # Save successful SMTP acceptance and counter before syncing dashboard.
+    queue_dashboard_sync(state, lead_id)
+    save_state(state)
+    sync_pending(state)
+    print("EMAIL_SENT", lead_id, "followup", int(entry.get("followup_count") or 0), "daily_total", state["sent_today"])
+
+
+def _attempt_send(entry, state, subject, body, is_followup=False):
+    if state.get("send_day_wib") != _today_wib():
+        state["send_day_wib"] = _today_wib()
+        state["sent_today"] = 0
+    if int(state.get("sent_today") or 0) >= MAX_DAILY_SENDS:
+        return False
+    if not ENABLE_AUTO_EMAIL or not _smtp_configured():
+        return False
+    if entry.get("status") in ("replied", "blocked") or entry.get("blocked"):
+        return False
+    try:
+        _send_entry(entry, state, subject, body, is_followup)
+        return True
+    except Exception as exc:
+        # If SMTP succeeded but dashboard sync failed, preserve SENT and retry only the dashboard sync.
+        if entry.get("status") == "sent" and entry.get("last_message_id"):
+            queue_dashboard_sync(state, entry["record"]["id"])
+            save_state(state)
+            print("DASHBOARD_SYNC_DEFERRED", entry["record"]["id"], type(exc).__name__)
+            return False
+        entry["attempts"] = int(entry.get("attempts") or 0) + 1
+        entry["error"] = (type(exc).__name__ + ": " + str(exc))[:400]
+        entry["status"] = "failed" if entry["attempts"] >= 3 else "queued"
+        queue_dashboard_sync(state, entry["record"]["id"])
+        save_state(state)
+        try:
+            sync_pending(state)
+        except Exception as sync_exc:
+            print("DASHBOARD_SYNC_DEFERRED", entry["record"]["id"], type(sync_exc).__name__)
+        print("EMAIL_SEND_ERROR", entry["record"]["id"], entry["attempts"], type(exc).__name__)
+        return False
+
+
+def _send_due_followups(state, mailbox_ready, max_to_send):
+    if not mailbox_ready or not ENABLE_AUTO_EMAIL or not _smtp_configured():
+        return 0
+    now = datetime.now(timezone.utc)
+    due = [
+        entry for entry in state["records"].values()
+        if _followup_due(entry, now) and int(entry.get("attempts") or 0) < 3
+    ]
+    due.sort(key=lambda item: item.get("first_sent_at") or "")
+    sent = 0
+    for entry in due:
+        if sent >= max_to_send or int(state.get("sent_today") or 0) >= MAX_DAILY_SENDS:
+            break
+        if state.get("pending_sync"):
+            break
+        stage = int(entry.get("followup_count") or 0)
+        if _attempt_send(
+            entry, state, entry.get("subject") or "Tindak lanjut otomasi workflow",
+            _followup_copy(entry, stage), True
+        ):
+            sent += 1
+    return sent
+
+
+def _send_queued_initial_emails(state, max_to_send):
+    if not ENABLE_AUTO_EMAIL or not _smtp_configured():
+        print("AUTO_EMAIL_PAUSED", "Set SMTP secrets and ENABLE_AUTO_EMAIL=true to send queued emails.")
+        return 0
+    candidates = [
+        entry for entry in state["records"].values()
+        if entry.get("status") in ("queued", "failed")
+        and not entry.get("sent_at")
+        and not entry.get("blocked")
+        and int(entry.get("score") or 0) >= MIN_SCORE_TO_SEND
+        and int(entry.get("attempts") or 0) < 3
+    ]
+    candidates.sort(key=lambda item: int(item.get("score") or 0), reverse=True)
+    sent = 0
+    for entry in candidates:
+        if sent >= max_to_send or int(state.get("sent_today") or 0) >= MAX_DAILY_SENDS:
+            break
+        if state.get("pending_sync"):
+            break
+        if _attempt_send(entry, state, entry.get("subject") or "Otomasi workflow untuk bisnis Anda", entry.get("body") or ""):
+            sent += 1
+    return sent
+
+
+def _make_entry(lead, ai, score):
+    email_address = str(lead.get("recipient_email") or "").strip().lower()
+    lead_id = make_id(email_address)
+    website_url = str(lead.get("website_url") or lead.get("email_source_url") or "").strip()
+    social_url = str(lead.get("social_url") or "").strip()
+    platform, handle = _platform_and_handle(social_url, website_url)
+    business_name = str(ai.get("business_name") or lead.get("search_title") or email_address.split("@")[0]).strip()
+    city = str(ai.get("city") or fallback_city(lead) or "Tidak diketahui dari evidence publik")
+    category = str(ai.get("niche") or fallback_niche(lead) or "Tidak diketahui dari evidence publik")
+    preview = str(ai.get("body") or "").strip()[:500]
+    record = {
+        "id": lead_id,
+        "platform": platform,
+        "name": business_name[:200],
+        "handle": handle[:200],
+        "contact": email_address,
+        "phone": extract_phone(lead.get("public_evidence", "")),
+        "url": website_url[:1000],
+        "category": category[:120],
+        "city": city[:120],
+        "campaign": CAMPAIGN_NAME[:120],
+        "message_preview": preview,
+        "status": "queued",
+        "sent_at": None,
+        "replied_at": None,
+        "error": None,
+    }
+    subject = str(ai.get("subject") or ("Otomasi workflow untuk " + business_name))[:220]
+    body = str(ai.get("body") or "").strip()
+    return lead_id, {
+        "record": record,
+        "score": int(score),
+        "subject": subject,
+        "body": body,
+        "status": "queued",
+        "sent_at": None,
+        "first_sent_at": None,
+        "last_sent_at": None,
+        "last_message_id": None,
+        "last_message_preview": preview,
+        "reply_preview": None,
+        "replied_at": None,
+        "error": None,
+        "attempts": 0,
+        "followup_count": 0,
+        "blocked": False,
+    }
+
 
 def run():
-    leads=discover()
-    print("DISCOVERY",len(leads))
-    rows=[]
-    for i,lead in enumerate(leads[:MAX_AI_PER_RUN]):
-        try:
-            ai=clean_ai_result(score_one(lead),lead)
-            score=int(ai["score"])
-            rows.append({
-              "lead_id":make_id(lead["recipient_email"]),
-              "tanggal_ditemukan":datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S"),
-              "nama_bisnis":ai["business_name"],
-              "recipient_email":lead["recipient_email"],
-              "email_source_url":lead["email_source_url"],
-              "website_url":lead["website_url"],
-              "social_url":lead["social_url"],
-              "kota":ai["city"] or fallback_city(lead) or "Tidak diketahui dari evidence publik",
-              "kategori":ai["niche"] or fallback_niche(lead) or "Tidak diketahui dari evidence publik",
-              "bukti_publik":lead["public_evidence"],
-              "skor":score,
-              "alasan":ai["personal_hook"],
-              "pain_point":ai["pain_point"],
-              "detected_need":ai["detected_need"],
-              "recommended_service":ai["recommended_service"],
-              "subject":f"[SJ-{make_id(lead['recipient_email'])}] {ai['subject']}"[:245],
-              "body":ai["body"],
-              "status":"READY" if score>=75 else "REVIEW",
-              "catatan":"public business email; source="+lead.get("search_backend","unknown")+"; queued for automated sales cycle"
-            })
-        except Exception as e:
-            print("AI_ERROR",i,type(e).__name__,e)
-    if rows:
-        print("INGEST",sheet_call("ingest",rows=rows))
-    print("SALES_QUEUE", "Leads queued in Google Sheets; 2-hour Apps Script cycle handles automated sending, follow-ups, and replies.")
+    if not GEMINI_API_KEY:
+        raise RuntimeError("Missing GEMINI_API_KEY.")
+    if not INGEST_TOKEN or INGEST_TOKEN == "INGEST_TOKEN":
+        raise RuntimeError("Set the real dashboard INGEST_TOKEN in GitHub Actions Secrets.")
 
-if __name__=="__main__":
+    state = load_state()
+    # A pending row sync is retried before new scraping or any outbound send.
+    sync_pending(state)
+    leads = discover()
+    print("DISCOVERY_COUNT", len(leads))
+    new_count = 0
+
+    for index, lead in enumerate(leads[:MAX_AI_PER_RUN]):
+        try:
+            ai = clean_ai_result(score_one(lead), lead)
+            score = int(ai["score"])
+            lead_id, new_entry = _make_entry(lead, ai, score)
+            previous = state["records"].get(lead_id)
+            if previous:
+                # Do not overwrite an outreach history or an opt-out with a fresh scrape.
+                if previous.get("status") in ("sent", "replied", "blocked") or previous.get("sent_at"):
+                    continue
+                new_entry["attempts"] = int(previous.get("attempts") or 0)
+                new_entry["followup_count"] = int(previous.get("followup_count") or 0)
+                state["records"][lead_id] = new_entry
+            else:
+                state["records"][lead_id] = new_entry
+                new_count += 1
+            queue_dashboard_sync(state, lead_id)
+        except Exception as exc:
+            print("AI_OR_RECORD_ERROR", index, type(exc).__name__, str(exc)[:250])
+
+    save_state(state)
+    sync_pending(state)
+    mailbox_ready = scan_replies(state)
+
+    if state.get("pending_sync"):
+        print("SEND_PAUSED", "Dashboard status updates remain pending.")
+        save_state(state)
+        return
+
+    sent = _send_due_followups(state, mailbox_ready, MAX_SENDS_PER_RUN)
+    remaining_run_quota = max(0, MAX_SENDS_PER_RUN - sent)
+    sent += _send_queued_initial_emails(state, remaining_run_quota)
+    save_state(state)
+    print(
+        "SCRAPE_CYCLE_COMPLETE",
+        json.dumps({
+            "new_records": new_count,
+            "tracked_records": len(state.get("records", {})),
+            "sent_this_run": sent,
+            "sent_today_wib": state.get("sent_today", 0),
+            "daily_limit": MAX_DAILY_SENDS,
+            "followup_scan_enabled": mailbox_ready,
+            "auto_email_enabled": bool(ENABLE_AUTO_EMAIL and _smtp_configured()),
+            "dashboard_url": DASHBOARD_INGEST_URL,
+        }, ensure_ascii=False),
+    )
+
+
+if __name__ == "__main__":
     run()
