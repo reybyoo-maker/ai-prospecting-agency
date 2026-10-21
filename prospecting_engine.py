@@ -153,7 +153,7 @@ def add_portfolio_offer(body, language="id"):
         if not any(x in low for x in ("free workflow audit", "free audit", "free consultation", "complimentary audit")):
             additions.append("I’d be happy to offer a free, no-obligation workflow audit and consultation.")
         if not any(x in low for x in ("operating cost", "headcount", "manual hours", "repetitive task", "repetitive work", "lower-cost")):
-            additions.append("For suitable repetitive tasks, automation may cost less than hiring additional staff or paying overtime; actual savings depend on the workflow.")
+            additions.append("For suitable repetitive tasks, automation may cost less than hiring additional staff or paying overtime, which may help reduce operating costs; actual savings depend on the workflow.")
         if PORTFOLIO_URL.lower() not in low:
             additions.append("Portfolio: " + PORTFOLIO_URL)
         if INSTAGRAM_HANDLE.lower() not in low:
