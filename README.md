@@ -1,11 +1,11 @@
 # AIGROWTH — Automatic Prospecting & Outreach
 
-Repository ini menjalankan discovery bisnis publik di Indonesia dan sejumlah pasar internasional, riset/scoring Gemini, sinkronisasi langsung ke panel Database Scraping AIGROWTH, serta dukungan email dan deteksi balasan. Sistem tidak menggunakan Google Sheets atau Apps Script untuk ingest prospek. Email otomatis tetap nonaktif secara default.
+Repository ini menjalankan discovery dari sumber web publik untuk bisnis dan profesional independen di Indonesia serta pasar internasional, riset/scoring Gemini, sinkronisasi langsung ke panel Database Scraping AIGROWTH, serta dukungan email dan deteksi balasan. Sistem tidak menggunakan Google Sheets atau Apps Script untuk ingest prospek. Email otomatis tetap nonaktif secara default.
 
 ## Alur utama
 
 1. GitHub Actions berjalan otomatis setiap 2 jam.
-2. prospecting_engine.py mencari bisnis dari web publik, mengambil bukti relevan, dan memvalidasi alamat email yang dipublikasikan.
+2. prospecting_engine.py mencari bisnis dan profesional independen dari web publik, mengambil bukti relevan, dan mengutamakan alamat email yang dipublikasikan dalam konteks kerja/profesional.
 3. Gemini memberi skor dan menulis pesan personal. Skor minimal 75 memenuhi syarat untuk email otomatis.
 4. Prospek baru dikirim ke endpoint dashboard dengan status queued dan ID stabil.
 5. Email yang diterima server SMTP memperbarui record ID yang sama menjadi sent.
@@ -20,6 +20,26 @@ Repository ini menjalankan discovery bisnis publik di Indonesia dan sejumlah pas
 - Pesan menawarkan audit workflow dan konsultasi awal gratis tanpa komitmen.
 - Penghematan biaya dijelaskan secara wajar untuk pekerjaan repetitif; sistem tidak menjanjikan otomasi selalu lebih murah atau menggantikan semua karyawan.
 - Footer memakai https://aigrowth.my.id, Instagram @ai.growth.agency, dan tanda tangan Rey — Founder, AI Growth Agency.
+
+
+## Discovery multi-mesin dan profesional independen
+
+Pencarian memprioritaskan kebutuhan kerja yang dapat dilayani AIGROWTH, bukan hanya nama perusahaan. Secara default, sekitar 30% kueri dialokasikan untuk profesional independen seperti freelancer, konsultan, solo founder, coach, dan content creator yang memiliki sinyal kebutuhan kerja yang dipublikasikan secara terbuka. Sisanya mencari bisnis dan organisasi. Rasio dapat diubah lewat `INDIVIDUAL_QUERY_RATIO` (0 sampai 0.5).
+
+Mesin dan fallback yang tersedia:
+- DDGS mencoba beberapa backend bergilir: Google, Brave, Bing, dan DuckDuckGo.
+- Jika hasil sedikit atau backend gagal, fallback HTML mencoba Google, Bing, DuckDuckGo, Brave Search, Yandex, Startpage, Ecosia, Qwant, dan Swisscows. Sistem menggabungkan hasil unik lintas sumber dan mencatat status HTTP serta jumlah hasil per provider.
+- SearXNG dapat ditambahkan melalui `SEARXNG_BASE_URLS`, berupa daftar URL instance yang dipisahkan koma. Format JSON bergantung pada konfigurasi instance; sistem mencoba fallback HTML bila JSON tidak tersedia.
+- Brave Search API dapat digunakan dengan `BRAVE_SEARCH_API_KEY`. Tanpa key, sistem tetap menggunakan fallback pencarian publik.
+- Kueri profesional mencari sinyal kerja publik seperti permintaan bantuan workflow, administrasi, lead follow-up, onboarding klien, jadwal/booking, dan layanan pelanggan. Pencarian dengan operator seperti `site:` digunakan untuk memfokuskan hasil ke sumber profesional tertentu.
+
+Batas privasi: sistem hanya menggunakan bukti yang tersedia publik dan relevan dengan kegiatan bisnis/kerja. Sistem tidak melakukan pemeriksaan akun privat, enumerasi pendaftaran akun email, reverse lookup nomor telepon pribadi, atau profiling atribut sensitif. Profil sosial hanya dicari sebagai jejak profesional publik; halaman media sosial tidak di-crawl untuk mengekstrak kontak tersembunyi.
+
+### Pengayaan profil opsional (Apify)
+
+Pengayaan profil sosial dengan Apify tersedia tetapi **nonaktif secara default** karena dapat memakai kredit berbayar. Untuk mengaktifkannya secara sengaja, atur GitHub Actions Secrets `APIFY_API_TOKEN`, lalu variable `APIFY_ENRICHMENT_ENABLED=true`. Actor default adalah `tri_angle~social-media-finder`; ganti `APIFY_ACTOR_ID` bila menggunakan actor lain yang input/output-nya kompatibel. `APIFY_MAX_NAMES_PER_RUN` membatasi jumlah nama yang dikirim. Integrasi ini hanya mengambil URL profil sosial yang dapat dicocokkan dengan nama prospek publik; tidak mengimpor telepon pribadi atau email privat.
+
+Pengaturan pencarian ada di `.env.example`. Batas `DIRECT_SEARCH_PROVIDERS_PER_QUERY` dan timeout menjaga siklus agar tidak terus menunggu mesin yang sedang bermasalah. Provider bisa menolak permintaan, menerapkan rate limit, menampilkan CAPTCHA, atau mengubah markup; karena itu hasil setiap provider dicatat dan hasil penemuan tidak dijamin pada setiap siklus.
 
 ## Kontrak dashboard
 
