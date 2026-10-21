@@ -1,102 +1,279 @@
-name: Sonjaya 24x7 AI Sales Engine
+name: AIGROWTH Automatic Scraping & Outreach
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnose_auth:
+        description: "Run a safe auth diagnostic using an empty records payload only"
+        required: false
+        type: boolean
+        default: false
+      inspect_worker_auth:
+        description: "Read Worker source and report only ingest-auth code snippets; does not scrape or email"
+        required: false
+        type: boolean
+        default: false
+      sync_ingest_secret:
+        description: "Set Worker INGEST_TOKEN to the existing GitHub secret, then verify with an empty payload only"
+        required: false
+        type: boolean
+        default: false
+      inspect_deployment_versions:
+        description: "Read-only: compare latest Worker version with active deployments"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "17 */2 * * *"
 
 concurrency:
-  group: sonjaya-sales-discovery
+  group: aigrowth-dashboard-scraping
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  run-engine:
+  scrape-and-outreach:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
+      - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Discover, score, and queue leads
+      - name: Inspect Worker versions and active deployment (read-only)
+        if: ${{ inputs.inspect_deployment_versions && !inputs.sync_ingest_secret }}
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
-          GEMINI_MODEL: "gemini-3.5-flash-lite"
-          MAX_PER_RUN: "80"
-          MAX_AI_PER_RUN: "60"
-          SEARCH_BACKENDS: "google,brave,bing,duckduckgo"
-          QUERIES_PER_RUN: "24"
-          SEARCH_TIMEOUT: "25"
-        run: python prospecting_engine.py
-      - name: Verify daily-send cap is deployed in Apps Script
-        id: appscript_version
-        env:
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python - <<'PY'
-          import os, requests
-          ready = False
+          import os, sys, requests
+          account = "4930c889e124c72813dfad52aa3ea507"
+          worker = "aigrowth-owner-dashboard"
+          token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+          if not token:
+              print("INSPECTION_ABORTED: CLOUDFLARE_API_TOKEN secret is missing or unavailable.")
+              sys.exit(1)
+          root = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/{worker}"
+          headers = {"Authorization": f"Bearer {token}"}
+          for label, url in [
+              ("VERSIONS", root + "/versions?per_page=5"),
+              ("DEPLOYMENTS", root + "/deployments"),
+          ]:
+              try:
+                  response = requests.get(url, headers=headers, timeout=30)
+                  print(label + "_HTTP", response.status_code)
+                  data = response.json()
+              except Exception as exc:
+                  print(label + "_READ_FAILED", type(exc).__name__)
+                  sys.exit(1)
+              if not response.ok or not data.get("success"):
+                  for error in data.get("errors", [])[:3]:
+                      print(label + "_API_ERROR", error.get("code"), str(error.get("message", ""))[:200])
+                  sys.exit(1)
+              result = data.get("result") or {}
+              if label == "VERSIONS":
+                  versions = result if isinstance(result, list) else result.get("result", [])
+                  print("LATEST_VERSION_COUNT_RETURNED", len(versions))
+                  for item in versions[:5]:
+                      metadata = item.get("metadata") or {}
+                      annotations = metadata.get("annotations") or {}
+                      print("VERSION", item.get("id"), "NUMBER", item.get("number"), "CREATED", item.get("created_on"), "TAG", annotations.get("workers/tag"), "MESSAGE", str(annotations.get("workers/message", ""))[:120])
+                  latest_id = versions[0].get("id") if versions else None
+              else:
+                  deployments = result.get("deployments", []) if isinstance(result, dict) else []
+                  print("DEPLOYMENT_COUNT_RETURNED", len(deployments))
+                  for i, item in enumerate(deployments[:5]):
+                      active_versions = []
+                      for version in item.get("versions", []) or []:
+                          active_versions.append({"version_id": version.get("version_id"), "percentage": version.get("percentage")})
+                      print("DEPLOYMENT", i + 1, "ID", item.get("id"), "CREATED", item.get("created_on"), "VERSIONS", active_versions)
+                  if deployments and latest_id:
+                      active_ids = [v.get("version_id") for v in (deployments[0].get("versions", []) or [])]
+                      print("LATEST_VERSION_IS_IN_CURRENT_DEPLOYMENT", latest_id in active_ids)
+                  else:
+                      print("DEPLOYMENT_COMPARISON_UNAVAILABLE")
+          PY
+      - name: Sync dashboard INGEST_TOKEN from GitHub secret and verify (no records)
+        if: ${{ inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
+        run: |
+          python - <<'PY'
+          import os, sys, time, requests
+          account = "4930c889e124c72813dfad52aa3ea507"
+          worker = "aigrowth-owner-dashboard"
+          cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+          ingest_token = os.getenv("INGEST_TOKEN", "").strip()
+          if not cf_token or not ingest_token:
+              print("SYNC_ABORTED: one or more required GitHub Actions secrets are missing.")
+              sys.exit(1)
+          url = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/{worker}/secrets"
           try:
-              response = requests.post(
-                  os.environ["SHEET_WEBHOOK_URL"],
-                  json={"token": os.environ["WEBHOOK_TOKEN"], "action": "healthcheck"},
+              response = requests.put(
+                  url,
+                  headers={"Authorization": f"Bearer {cf_token}", "Content-Type": "application/json"},
+                  json={"name": "INGEST_TOKEN", "text": ingest_token, "type": "secret_text"},
                   timeout=30,
               )
-              response.raise_for_status()
-              data = response.json()
-              version = str(data.get("version", "unknown"))
-              ready = bool(data.get("ok")) and version == "2026-10-21.1"
-              print("APPS_SCRIPT_VERSION", version)
-              print("OUTBOUND_SEND_READY", ready)
           except Exception as exc:
-              print("APPS_SCRIPT_VERSION_CHECK_FAILED", repr(exc))
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("ready=" + ("true" if ready else "false") + "\n")
+              print("CLOUDFLARE_SECRET_UPDATE_FAILED:", type(exc).__name__)
+              sys.exit(1)
+          try:
+              data = response.json()
+          except Exception:
+              data = {}
+          print("CLOUDFLARE_SECRET_UPDATE_HTTP", response.status_code)
+          if not response.ok or not data.get("success"):
+              for error in data.get("errors", [])[:3]:
+                  print("CLOUDFLARE_API_ERROR", error.get("code"), str(error.get("message", ""))[:240])
+              print("SECRET_SYNC_FAILED")
+              sys.exit(1)
+          result = data.get("result") or {}
+          print("SECRET_SYNC_OK", result.get("name", "INGEST_TOKEN"), result.get("type", "secret_text"))
+          ingest_url = os.getenv("DASHBOARD_INGEST_URL", "").strip()
+          for attempt in range(1, 7):
+              try:
+                  check = requests.post(
+                      ingest_url,
+                      headers={"Authorization": f"Bearer {ingest_token}", "Content-Type": "application/json"},
+                      json={"records": []},
+                      timeout=20,
+                  )
+                  print("EMPTY_PAYLOAD_VERIFY_ATTEMPT", attempt, "HTTP", check.status_code)
+                  if 200 <= check.status_code < 300:
+                      print("INGEST_AUTH_VERIFY_OK")
+                      sys.exit(0)
+                  if check.status_code != 401 and check.status_code != 503:
+                      try:
+                          body = check.json()
+                          print("VERIFY_RESPONSE", str(body.get("error", body.get("ok", "response")))[:200])
+                      except Exception:
+                          print("VERIFY_RESPONSE_BODY_OMITTED")
+                      sys.exit(1)
+              except Exception as exc:
+                  print("VERIFY_REQUEST_ERROR", type(exc).__name__)
+              if attempt < 6:
+                  time.sleep(3)
+          print("INGEST_AUTH_VERIFY_FAILED: Worker did not accept the token after secret update.")
+          sys.exit(1)
           PY
-      - name: Run outbound sales stages
-        if: steps.appscript_version.outputs.ready == 'true'
+      - name: Inspect dashboard Worker ingest auth (read-only)
+        if: ${{ inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
         env:
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python - <<'PY'
-          import os, requests, sys, time
-          base = {"token": os.environ["WEBHOOK_TOKEN"]}
-          url = os.environ["SHEET_WEBHOOK_URL"]
-
-          def post(action, timeout=180, required=True, **extra):
-              payload = dict(base, action=action, **extra)
-              last = None
-              for attempt in range(3):
-                  try:
-                      r = requests.post(url, json=payload, timeout=timeout)
-                      print(action, r.status_code, r.text[:3000])
-                      r.raise_for_status()
-                      data = r.json()
-                      if required and not data.get("ok"):
-                          raise RuntimeError(data)
-                      return data
-                  except Exception as exc:
-                      last = exc
-                      if attempt < 2:
-                          time.sleep(2 * (attempt + 1))
-              if required:
-                  raise last
-              print("OPTIONAL_STAGE_FAILED", action, repr(last))
-              return {"ok": False, "error": str(last)}
-
-          # One shared daily cap covers AI replies, due follow-ups, and new outreach.
-          # Handle replies first, then follow-ups, then new prospect emails.
-          post("scan_replies", limit=10, timeout=180, required=False)
-          post("process_followups", limit=20, timeout=180, required=True)
-          send = post("send_queue", limit=20, timeout=180, required=True)
-          print("SALES_STAGES_OK", {"send": send})
+          import os, re, sys, requests
+          account = "4930c889e124c72813dfad52aa3ea507"
+          worker = "aigrowth-owner-dashboard"
+          url = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/{worker}/content/v2"
+          token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+          if not token:
+              print("SOURCE_READ_FAILED: CLOUDFLARE_API_TOKEN secret is missing or unavailable to this workflow.")
+              sys.exit(0)
+          try:
+              response = requests.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/javascript"}, timeout=30)
+          except Exception as exc:
+              print("SOURCE_READ_FAILED:", type(exc).__name__)
+              sys.exit(0)
+          print("CLOUDFLARE_SOURCE_HTTP", response.status_code)
+          print("CONTENT_TYPE", response.headers.get("content-type", "unknown").split(";")[0])
+          if not response.ok:
+              try:
+                  data = response.json()
+                  for error in data.get("errors", [])[:3]:
+                      print("CLOUDFLARE_API_ERROR", error.get("code"), str(error.get("message", ""))[:240])
+              except Exception:
+                  print("SOURCE_READ_FAILED: response body omitted")
+              sys.exit(0)
+          source = response.content.decode("utf-8", errors="replace")
+          # Print only source contexts relevant to auth; never print request headers or secret values.
+          source = re.sub(r'(?i)(authorization\s*[:=]\s*["\']?(?:bearer\s+)?)[A-Za-z0-9._~+/-]{16,}', r'\1[REDACTED]', source)
+          source = re.sub(r'(?i)((?:token|secret|password|api[_-]?key)\s*[:=]\s*["\'])[^\"\']{8,}(["\'])', r'\1[REDACTED]\2', source)
+          needles = ["Token tidak valid", "INGEST_TOKEN", "DASHBOARD_INGEST_TOKEN", "api/ingest/scrape", "ingest/scrape", "Authorization"]
+          windows = []
+          for needle in needles:
+              start = 0
+              while len(windows) < 10:
+                  idx = source.lower().find(needle.lower(), start)
+                  if idx < 0:
+                      break
+                  lo, hi = max(0, idx - 420), min(len(source), idx + len(needle) + 620)
+                  snippet = source[lo:hi].replace("\r", " ").replace("\n", " ")
+                  if not any(snippet == old for old in windows):
+                      windows.append(snippet)
+                  start = idx + len(needle)
+              if len(windows) >= 10:
+                  break
+          print("SOURCE_BYTES", len(response.content))
+          print("AUTH_MATCH_COUNT", len(windows))
+          for i, snippet in enumerate(windows, 1):
+              print(f"--- AUTH_CONTEXT_{i} ---")
+              print(snippet[:1100])
+          if not windows:
+              print("No auth terms found; content response may be a multipart wrapper or bundle with different names.")
           PY
+      - name: Diagnose dashboard auth with empty payload only
+        if: ${{ inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
+        env:
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
+        run: python scripts/diagnose_dashboard_auth.py
+      - name: Scrape, score, and ingest directly into the dashboard
+        if: ${{ !inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          DASHBOARD_INGEST_URL: "https://aigrowth-owner-dashboard.reybyoo.workers.dev/api/ingest/scrape"
+          GEMINI_MODEL: "gemini-3.5-flash-lite"
+          MAX_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '12' || '80' }}
+          MAX_AI_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '5' || '60' }}
+          MAX_DAILY_SENDS: "20"
+          MAX_SENDS_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '0' || '20' }}
+          MIN_SCORE_TO_SEND: "75"
+          CAMPAIGN_NAME: "aigrowth-prospecting"
+          ENABLE_AUTO_EMAIL: ${{ github.event_name == 'workflow_dispatch' && 'false' || vars.ENABLE_AUTO_EMAIL || 'false' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_REPLY_TO: ${{ secrets.SMTP_REPLY_TO }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
+          IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          SEARCH_BACKENDS: "google,brave,bing,duckduckgo"
+          QUERIES_PER_RUN: ${{ github.event_name == 'workflow_dispatch' && '3' || '24' }}
+          SEARCH_TIMEOUT: "25"
+        run: python prospecting_engine.py
+      - name: Persist encrypted delivery and opt-out state
+        if: ${{ always() && !inputs.diagnose_auth && !inputs.inspect_worker_auth && !inputs.sync_ingest_secret && !inputs.inspect_deployment_versions }}
+        run: |
+          if [ ! -f runtime/prospecting-state.enc ]; then
+            echo "No encrypted state file was created."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime/prospecting-state.enc
+          if git diff --cached --quiet; then
+            echo "State unchanged."
+            exit 0
+          fi
+          git commit -m "chore: persist encrypted prospecting state [skip ci]"
+          for attempt in 1 2 3; do
+            if git pull --rebase origin "$GITHUB_REF_NAME" && git push; then
+              exit 0
+            fi
+            git rebase --abort || true
+            sleep "$((attempt * 3))"
+          done
+          echo "Failed to persist encrypted prospecting state after retries."
+          exit 1

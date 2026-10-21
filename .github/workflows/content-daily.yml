@@ -13,16 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Generate 7-day content plan and carousel files
+      - name: Generate local content assets and manifest
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
-          WEBHOOK_TOKEN: ${{ secrets.WEBHOOK_TOKEN }}
           GEMINI_MODEL: "gemini-3.5-flash-lite"
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: "main"
@@ -30,13 +28,9 @@ jobs:
       - name: Save content assets and manual-upload manifest
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+users.noreply.github.com"
           git add carousels content_manifest.json
-          git diff --cached --quiet || git commit -m "chore: update daily content assets"
+          git diff --cached --quiet || git commit -m "chore: update daily content assets [skip ci]"
           git push
-
-      - name: Wait for public GitHub asset URLs
-        run: sleep 10
-
       - name: Content Studio complete
-        run: echo "All content assets and scripts are stored for manual upload. No Instagram/TikTok auto-publishing is enabled."
+        run: echo "Assets are stored in GitHub for manual upload. No spreadsheet, auto-publishing, or social messaging integration is enabled."

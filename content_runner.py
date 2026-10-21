@@ -16,8 +16,6 @@ from service_catalog import catalog_text
 WIB = timezone(timedelta(hours=7))
 KEY = os.environ["GEMINI_API_KEY"]
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-SHEET_WEBHOOK_URL = os.environ["SHEET_WEBHOOK_URL"]
-WEBHOOK_TOKEN = os.environ["WEBHOOK_TOKEN"]
 REPO = os.getenv("GITHUB_REPOSITORY", "reybyoo-maker/ai-prospecting-agency")
 BRANCH = os.getenv("GITHUB_REF_NAME", "main")
 
@@ -520,46 +518,6 @@ def build_carousel(post: dict) -> dict:
     return post
 
 
-def push_plans(posts: list[dict]) -> dict:
-    rows = []
-    for p in posts:
-        rows.append({
-            "date": p["date"],
-            "platform": "Instagram",
-            "format": "CAROUSEL_7_SLIDES",
-            "objective": p["objective"],
-            "topic": p["topic"],
-            "hook": p["hook"],
-            "caption": p["caption"],
-            "cta": p["cta"],
-            "slide_count": SLIDE_COUNT,
-            "carousel_pdf_url": p.get("carousel_pdf_url", ""),
-            "carousel_cover_url": p.get("carousel_cover_url", ""),
-            "slides_json": p.get("slides_json", ""),
-            "status": "READY_FOR_MANUAL_UPLOAD",
-            "publish_mode": "MANUAL_UPLOAD",
-            "content_pillar": p.get("pillar", ""),
-            "script": "\n\n".join(
-                [
-                    f"Slide {i+1} [{s.get('role','')}]\nJudul: {s.get('title','')}\nIsi: {s.get('body','')}\nVisual: {s.get('visual_direction','')}\nCatatan desain: {s.get('design_notes','')}"
-                    for i, s in enumerate(p.get("slides", [])[:SLIDE_COUNT])
-                ]
-            ),
-            "slide_urls": p.get("publish_image_urls", []),
-            "catatan": "Content Studio | asset dan script siap untuk upload manual.",
-        })
-    response = requests.post(
-        SHEET_WEBHOOK_URL,
-        json={"token": WEBHOOK_TOKEN, "action": "content_ingest", "rows": rows},
-        timeout=90,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("error", "content ingest failed"))
-    return data
-
-
 def write_publish_manifest(posts: list[dict]) -> None:
     manifest = {
         "generated_at": datetime.now(WIB).isoformat(),
@@ -587,5 +545,10 @@ if __name__ == "__main__":
         build_carousel(post)
     write_publish_manifest(plans)
     print("CONTENT_PLANS", len(plans))
-    print("SHEET", json.dumps(push_plans(plans), ensure_ascii=False))
-    print("CAROUSELS", sum(1 for p in plans if p.get("carousel_pdf_url")))
+    print("CONTENT_STUDIO_OUTPUT", json.dumps({
+        "plans": len(plans),
+        "manifest": "content_manifest.json",
+        "upload_mode": "manual",
+        "external_database": "disabled",
+        "carousels": sum(1 for p in plans if p.get("carousel_pdf_url")),
+    }, ensure_ascii=False))
