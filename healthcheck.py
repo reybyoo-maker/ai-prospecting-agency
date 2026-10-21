@@ -34,14 +34,19 @@ imap_configured = bool(
     and (os.getenv("IMAP_USERNAME") or os.getenv("SMTP_USERNAME", "")).strip()
     and (os.getenv("IMAP_PASSWORD") or os.getenv("SMTP_PASSWORD", "")).strip()
 )
+auto_email_enabled = os.getenv("ENABLE_AUTO_EMAIL", "false").strip().lower() in ("1", "true", "yes", "on")
 print("SMTP_CONFIGURED", smtp_configured)
 print("IMAP_CONFIGURED", imap_configured)
-print(
-    "AUTO_EMAIL_ENABLED",
-    os.getenv("ENABLE_AUTO_EMAIL", "false").strip().lower() in ("1", "true", "yes", "on"),
-)
+print("AUTO_EMAIL_ENABLED", auto_email_enabled)
+outreach_ready = bool(auto_email_enabled and smtp_configured and imap_configured)
+print("OUTREACH_READY", outreach_ready)
 if not smtp_configured:
-    print("NOTE Scraping can ingest records, but email remains queued until SMTP secrets are configured.")
+    print("NOTE Scraping can ingest records, but outbound email remains queued until SMTP secrets are configured.")
+if not imap_configured:
+    print("NOTE Outbound sending is fail-closed until IMAP is configured, so replies can be tracked and synced to the dashboard.")
+if auto_email_enabled and not (smtp_configured and imap_configured):
+    print("OUTREACH_PAUSED: Enable sending only after the required SMTP and IMAP secrets are available.")
+    ok = False
 
 if os.getenv("GEMINI_API_KEY", "").strip():
     try:
