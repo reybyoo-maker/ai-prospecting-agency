@@ -1,11 +1,12 @@
-name: Validate Sonjaya Agency
+name: Validate AIGROWTH Prospecting Integration
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: sonjaya-validate
+  group: aigrowth-validate
   cancel-in-progress: true
 
 permissions:
@@ -15,14 +16,17 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
       - name: Python syntax
+        run: python -m py_compile prospecting_engine.py service_catalog.py content_runner.py healthcheck.py
+      - name: Confirm active flows do not connect to spreadsheets
         run: |
-          python -m py_compile             prospecting_engine.py             service_catalog.py             content_runner.py
-      - name: Apps Script JavaScript syntax
-        run: |
-          cp apps-script/Code.gs /tmp/Code.gs.js
-          node --check /tmp/Code.gs.js
+          if grep -n -E 'SHEET_WEBHOOK_URL|SpreadsheetApp|content_ingest|WEBHOOK_TOKEN' prospecting_engine.py content_runner.py healthcheck.py .github/workflows/daily.yml .github/workflows/content-daily.yml .github/workflows/healthcheck.yml; then
+            echo "Legacy spreadsheet integration remains in an active file."
+            exit 1
+          fi
