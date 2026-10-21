@@ -239,10 +239,10 @@ jobs:
           MAX_PER_RUN: ${{ github.event_name != 'schedule' && '12' || '80' }}
           MAX_AI_PER_RUN: ${{ github.event_name != 'schedule' && '5' || '60' }}
           MAX_DAILY_SENDS: "20"
-          MAX_SENDS_PER_RUN: ${{ github.event_name == 'schedule' && '20' || '0' }}
+          MAX_SENDS_PER_RUN: ${{ github.event_name == 'schedule' && '20' || (contains(github.event.head_commit.message, '[run-prospecting-now]') && '14' || '0') }}
           MIN_SCORE_TO_SEND: "75"
           CAMPAIGN_NAME: "aigrowth-prospecting"
-          ENABLE_AUTO_EMAIL: ${{ github.event_name == 'schedule' && vars.ENABLE_AUTO_EMAIL || 'false' }}
+          ENABLE_AUTO_EMAIL: ${{ github.event_name == 'schedule' && vars.ENABLE_AUTO_EMAIL || (contains(github.event.head_commit.message, '[run-prospecting-now]') && 'true' || 'false') }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
