@@ -17,7 +17,7 @@ const CONTENT_PLAN_HEADERS = ["Tanggal","Platform","Format","Tujuan","Topik","Ho
 const AUTOMATION_LOG_SHEET = "Automation Log";
 const AUTOMATION_LOG_HEADERS = ["Tanggal","Cycle","Initial Sent","Follow-ups Sent","Replies Processed","Errors","Quota Before","Quota After","Status","Detail"];
 const SOCIAL_LEADS_HEADERS = ["Tanggal","Platform","Keyword","Username","User ID","Comment ID","Comment","Post ID","DM Status","WhatsApp Link","Catatan"];
-const CODE_VERSION = "2026-10-17.2";
+const CODE_VERSION = "2026-10-21.1";
 // Production social automation handlers are enabled in this version.
 
 const HEADERS = [
@@ -33,12 +33,39 @@ function sheet_(){
   let sh=ss.getSheetByName(SHEET_NAME);
   if(!sh) sh=ss.insertSheet(SHEET_NAME);
   ensureHeaders_(sh,HEADERS);
-  sh.setFrozenRows(1);
-  sh.getRange(1,1,1,HEADERS.length).setFontWeight("bold");
-  sh.getDataRange().setWrap(true);
+  applyWrappedTableLayout_(sh,HEADERS,[
+    115,160,190,225,230,220,175,110,145,285,75,90,235,210,250,250,260,360,
+    130,150,160,160,160,150,155,300,190,85,260,85,230,105,220
+  ],{frozenColumns:4,noWrapHeaders:["Bukti publik","Last Reply"]});
   configureProspectControls_(sh);
   backfillProspectControls_(sh);
   return sh;
+}
+
+function applyWrappedTableLayout_(sh,headers,widths,options){
+  options=options||{};
+  const lastRow=Math.max(1,sh.getLastRow());
+  const columnCount=headers.length;
+  sh.setFrozenRows(1);
+  if(Number(options.frozenColumns||0)>0){
+    sh.setFrozenColumns(Math.min(Number(options.frozenColumns),columnCount));
+  }
+  sh.getRange(1,1,lastRow,columnCount).setWrap(true).setVerticalAlignment("top");
+  sh.getRange(1,1,1,columnCount)
+    .setFontWeight("bold")
+    .setWrap(true)
+    .setVerticalAlignment("middle");
+  sh.setRowHeight(1,42);
+  widths.forEach(function(width,index){
+    if(width)sh.setColumnWidth(index+1,width);
+  });
+  (options.noWrapHeaders||[]).forEach(function(header){
+    const column=headers.indexOf(header)+1;
+    if(column>0&&lastRow>1)sh.getRange(2,column,lastRow-1,1).setWrap(false);
+  });
+  if(options.rowHeight&&lastRow>1){
+    sh.setRowHeights(2,lastRow-1,Number(options.rowHeight));
+  }
 }
 
 function prospectDataLastRow_(sh){
@@ -115,19 +142,9 @@ function automationLogSheet_(){
   let sh=ss.getSheetByName(AUTOMATION_LOG_SHEET);
   if(!sh)sh=ss.insertSheet(AUTOMATION_LOG_SHEET);
   ensureHeaders_(sh,AUTOMATION_LOG_HEADERS);
-  sh.setFrozenRows(1);
-  sh.getRange(1,1,1,AUTOMATION_LOG_HEADERS.length).setFontWeight("bold");
-  sh.getDataRange().setWrap(true);
-  sh.setColumnWidth(1,145);
-  sh.setColumnWidth(2,150);
-  sh.setColumnWidth(3,105);
-  sh.setColumnWidth(4,120);
-  sh.setColumnWidth(5,120);
-  sh.setColumnWidth(6,90);
-  sh.setColumnWidth(7,105);
-  sh.setColumnWidth(8,105);
-  sh.setColumnWidth(9,100);
-  sh.setColumnWidth(10,520);
+  applyWrappedTableLayout_(sh,AUTOMATION_LOG_HEADERS,
+    [145,150,105,120,120,90,105,105,100,360],
+    {frozenColumns:2,noWrapHeaders:["Detail"],rowHeight:52});
   return sh;
 }
 
@@ -136,26 +153,15 @@ function contentPlanningSheet_(){
   let sh=ss.getSheetByName(CONTENT_PLAN_SHEET);
   if(!sh)sh=ss.insertSheet(CONTENT_PLAN_SHEET);
   ensureHeaders_(sh,CONTENT_PLAN_HEADERS);
-  sh.setFrozenRows(1);
-  sh.getRange(1,1,1,CONTENT_PLAN_HEADERS.length).setFontWeight("bold");
-  sh.getDataRange().setWrap(true);
-  sh.setColumnWidth(1,105);
-  sh.setColumnWidth(2,95);
-  sh.setColumnWidth(3,135);
-  sh.setColumnWidth(4,180);
-  sh.setColumnWidth(5,260);
-  sh.setColumnWidth(6,300);
-  sh.setColumnWidth(7,420);
-  sh.setColumnWidth(8,260);
-  sh.setColumnWidth(10,230);
-  sh.setColumnWidth(11,230);
-  sh.setColumnWidth(16,220);
-  sh.setColumnWidth(17,520);
-  for(let col=18;col<=24;col++)sh.setColumnWidth(col,230);
-  for(let col=25;col<=31;col++)sh.setColumnWidth(col,180);
-  if(sh.getLastRow()>=2){
-    sh.setRowHeights(2,sh.getLastRow()-1,180);
-  }
+  applyWrappedTableLayout_(sh,CONTENT_PLAN_HEADERS,[
+    105,95,135,150,180,200,260,190,85,210,210,240,170,150,210,165,280,
+    190,190,190,190,190,190,190,125,125,125,125,125,125,125
+  ],{
+    frozenColumns:2,
+    noWrapHeaders:["Slides JSON","Script Lengkap","Carousel PDF URL","Carousel Cover URL",
+      "Slide 1 URL","Slide 2 URL","Slide 3 URL","Slide 4 URL","Slide 5 URL","Slide 6 URL","Slide 7 URL"],
+    rowHeight:100
+  });
   return sh;
 }
 
@@ -165,8 +171,9 @@ function contentSheet_(){
   if(!sh) sh=ss.insertSheet(CONTENT_SHEET);
   const h=CONTENT_HEADERS;
   ensureHeaders_(sh,h);
-  sh.setFrozenRows(1);
-  sh.getRange(1,1,1,h.length).setFontWeight("bold");
+  applyWrappedTableLayout_(sh,h,
+    [105,110,150,200,230,260,220,300,230,150,220],
+    {frozenColumns:2,noWrapHeaders:["Visual Prompt","Asset URL","Publish Result"],rowHeight:80});
   return sh;
 }
 
@@ -432,6 +439,10 @@ function ingest_(rows){
     set("Manual Send",false); set("Send Result","WAITING_FOR_AUTOMATIC_SEND");
     const newRow=prospectDataLastRow_(sh)+1;
     sh.getRange(newRow,1,1,HEADERS.length).setValues([o]);
+    sh.getRange(newRow,1,1,HEADERS.length).setWrap(true).setVerticalAlignment("top");
+    sh.getRange(newRow,col_("Bukti publik")).setWrap(false);
+    sh.getRange(newRow,col_("Last Reply")).setWrap(false);
+    sh.autoResizeRows(newRow,1);
     sh.getRange(newRow,col_("Manual Send"))
       .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build())
       .setValue(false);
@@ -838,7 +849,17 @@ function ingestContent_(rows){
         row[idx["Slide "+(i+1)+" Preview"]]="=IMAGE(\""+url.replace(/"/g,'""')+"\")";
       }
     }
-    sh.appendRow(row); existing[key]=true; added++;
+    sh.appendRow(row);
+    const newRow=sh.getLastRow();
+    sh.getRange(newRow,1,1,CONTENT_PLAN_HEADERS.length).setWrap(true).setVerticalAlignment("top");
+    ["Slides JSON","Script Lengkap","Carousel PDF URL","Carousel Cover URL",
+      "Slide 1 URL","Slide 2 URL","Slide 3 URL","Slide 4 URL","Slide 5 URL","Slide 6 URL","Slide 7 URL"]
+      .forEach(function(header){
+        const column=idx[header]+1;
+        if(column>0)sh.getRange(newRow,column).setWrap(false);
+      });
+    sh.setRowHeight(newRow,100);
+    existing[key]=true; added++;
   });
   return json_({ok:true,added:added,duplicates:duplicates});
 }
@@ -893,6 +914,10 @@ function logSalesCycle_(replies,sends,followups){
     status,
     JSON.stringify({replies:r,sends:s,followups:f}).slice(0,5000)
   ]);
+  const logRow=sh.getLastRow();
+  sh.getRange(logRow,1,1,AUTOMATION_LOG_HEADERS.length).setWrap(true).setVerticalAlignment("top");
+  sh.getRange(logRow,10).setWrap(false);
+  sh.setRowHeight(logRow,52);
   return {replies:r,sends:s,followups:f};
 }
 
