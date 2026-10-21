@@ -6,7 +6,7 @@ SERVICES = [
       "n8n", "automation", "otomasi", "workflow", "integrasi aplikasi",
       "integrasi sistem", "pekerjaan berulang", "proses manual", "data entry",
       "lead generation", "follow-up", "whatsapp", "crm", "form",
-      "booking", "reservasi", "invoice", "spreadsheet", "e-commerce",
+      "booking", "reservasi", "invoice", "e-commerce",
       "notifikasi", "sinkronisasi data", "operasional"
     ],
     "pitch": "membangun otomasi workflow menggunakan n8n untuk menghubungkan aplikasi dan menjalankan proses berulang secara otomatis; workflow dirancang agar dapat berjalan 24/7 sesuai kebutuhan dan konfigurasi bisnis."
