@@ -43,6 +43,12 @@ IMAP_PASSWORD = (os.getenv("IMAP_PASSWORD") or SMTP_PASSWORD).strip()
 AGENCY_NAME = "AI Growth Agency"
 SEARCH_BACKENDS = os.getenv("SEARCH_BACKENDS", "google,brave,bing,duckduckgo").strip()
 SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT") or "25")
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+SEARXNG_BASE_URLS = os.getenv("SEARXNG_BASE_URLS", "").strip()
+APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "").strip()
+APIFY_ACTOR_ID = os.getenv("APIFY_ACTOR_ID", "tri_angle~social-media-finder").strip()
+APIFY_ENRICHMENT_ENABLED = os.getenv("APIFY_ENRICHMENT_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+APIFY_MAX_NAMES_PER_RUN = max(1, min(30, int(os.getenv("APIFY_MAX_NAMES_PER_RUN") or "15")))
 QUERY_PAUSE = float(os.getenv("QUERY_PAUSE") or "0.6")
 CONTACT_PATHS = ("/contact", "/kontak", "/hubungi-kami", "/hubungi", "/about", "/tentang-kami", "/tentang")
 MAX_CRAWL_PER_QUERY = int(os.getenv("MAX_CRAWL_PER_QUERY") or "2")
@@ -328,12 +334,14 @@ def page_evidence(url):
     return text, extract_email(text+" "+html)
 
 def extract_social(text):
-    m=re.search(
-        r'https?://(?:www\.)?(?:instagram\.com|tiktok\.com|linkedin\.com|facebook\.com)/[^\s<>"]+',
+    m = re.search(
+        r'https?://(?:www\.)?(?:instagram\.com|tiktok\.com|linkedin\.com|facebook\.com|'
+        r'x\.com|twitter\.com|threads\.net|github\.com|youtube\.com|medium\.com|'
+        r'pinterest\.com|twitch\.tv|discord\.com|telegram\.me|t\.me|wa\.me|whatsapp\.com)/[^\s<>"\']+',
         str(text or ""),
-        re.I
+        re.I,
     )
-    return m.group(0) if m else ""
+    return m.group(0).rstrip(".,);]") if m else ""
 
 def extract_phone(text):
     """Extract a likely public business phone number from scraped evidence."""
@@ -483,13 +491,12 @@ def direct_html_search(query, provider_offset=0, existing_urls=None):
 
     providers = []
     # Paid/credentialed provider: only called when the owner explicitly configures a key.
-    brave_api_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
-    if brave_api_key:
+    if BRAVE_SEARCH_API_KEY:
         providers.append(("brave_api", "https://api.search.brave.com/res/v1/web/search",
                           {"q": query, "count": 10, "country": "ID" if language == "id-id" else "US"},
-                          {"X-Subscription-Token": brave_api_key}, "json"))
+                          {"X-Subscription-Token": BRAVE_SEARCH_API_KEY}, "json"))
     # SearXNG instances are owner-configurable because public instances may disable JSON or go offline.
-    searx_urls = [x.strip().rstrip("/") for x in os.getenv("SEARXNG_BASE_URLS", "").split(",") if x.strip()]
+    searx_urls = [x.strip().rstrip("/") for x in SEARXNG_BASE_URLS.split(",") if x.strip()]
     for idx, base in enumerate(searx_urls[:3]):
         parsed_base = urlparse(base)
         if parsed_base.scheme in ("https", "http") and parsed_base.netloc:
@@ -611,7 +618,12 @@ def search_with_fallback(ddgs, query, backend_offset=0):
             successful.append(backend)
         return added
 
+    max_attempts = min(len(backends), max(max_ddgs, 2) + 1)
+    attempts = 0
     for backend in backends:
+        if attempts >= max_attempts:
+            break
+        attempts += 1
         try:
             items = ddgs.text(
                 query,
@@ -640,11 +652,91 @@ def search_with_fallback(ddgs, query, backend_offset=0):
         raise last_error
     return [], "none"
 
+def enrich_social_profiles(leads):
+    """Optional Apify enrichment of public profile URLs; off by default to avoid paid runs."""
+    if not APIFY_ENRICHMENT_ENABLED or not APIFY_API_TOKEN or not APIFY_ACTOR_ID or not leads:
+        return leads
+    eligible = []
+    seen_names = set()
+    for lead in leads:
+        name = norm(lead.get("search_title") or "")
+        if not name:
+            continue
+        key = name.casefold()
+        if key not in seen_names:
+            eligible.append(name)
+            seen_names.add(key)
+        if len(eligible) >= APIFY_MAX_NAMES_PER_RUN:
+            break
+    if not eligible:
+        print("APIFY_ENRICHMENT_SKIPPED no_public_professional_names")
+        return leads
+    payload = {
+        "profileNames": eligible,
+        "socials": ["linkedin", "github", "instagram", "threads", "tiktok", "youtube", "medium"],
+    }
+    endpoint = (
+        "https://api.apify.com/v2/actors/"
+        + APIFY_ACTOR_ID.replace("/", "~")
+        + "/run-sync-get-dataset-items"
+    )
+    try:
+        response = requests.post(
+            endpoint, params={"token": APIFY_API_TOKEN}, json=payload,
+            headers={"Accept": "application/json"}, timeout=max(20, min(90, SEARCH_TIMEOUT * 3)),
+        )
+        print("APIFY_ENRICHMENT_HTTP", response.status_code)
+        if response.status_code >= 400:
+            print("APIFY_ENRICHMENT_FAILED", response.status_code)
+            return leads
+        items = response.json()
+        if not isinstance(items, list):
+            print("APIFY_ENRICHMENT_FAILED unexpected_payload")
+            return leads
+
+        # Only attach a profile when the result carries a name that matches a queried public name.
+        # Don't import personal phone numbers, private emails, or unrelated records from actor output.
+        urls_by_name = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_name = norm(
+                item.get("profileName") or item.get("profile_name") or item.get("name")
+                or item.get("query") or item.get("searchedName") or item.get("searchQuery") or ""
+            )
+            if not item_name:
+                continue
+            urls = re.findall(
+                r'https?://(?:www\.)?(?:linkedin\.com|github\.com|instagram\.com|threads\.net|'
+                r'tiktok\.com|youtube\.com|medium\.com|pinterest\.com|twitch\.tv)/[^\s<>"\']+',
+                json.dumps(item, ensure_ascii=False), re.I
+            )
+            if urls:
+                urls_by_name[item_name.casefold()] = urls[0].rstrip(".,);]")
+
+        enriched = 0
+        for lead in leads:
+            if lead.get("social_url"):
+                continue
+            name = norm(lead.get("search_title") or "")
+            url = urls_by_name.get(name.casefold())
+            if url:
+                lead["social_url"] = url
+                lead["social_source"] = "apify_public_profile"
+                enriched += 1
+        print("APIFY_ENRICHMENT_STATS", json.dumps({
+            "names_submitted": len(eligible), "dataset_items": len(items), "profiles_matched": enriched
+        }))
+    except Exception as exc:
+        print("APIFY_ENRICHMENT_FAILED", type(exc).__name__, str(exc)[:180])
+    return leads
+
+
 def discover():
     found={}
     queries=search_queries()
     stats={"queries":len(queries),"query_errors":0,"backend_successes":0,"candidates":0,"emails":0}
-    with DDGS(timeout=SEARCH_TIMEOUT) as ddgs:
+    with DDGS(timeout=max(5, min(12, SEARCH_TIMEOUT))) as ddgs:
         for qi,q in enumerate(queries,1):
             try:
                 results,backend=search_with_fallback(ddgs,q,backend_offset=qi-1)
@@ -675,7 +767,7 @@ def discover():
 
                     social=extract_social(evidence)
                     found[key]={
-                        "prospect_type": "individual_professional" if any(token in q.lower() for token in ("freelancer", "independent consultant", "content creator", "coach", "solopreneur", "solo founder", "site:linkedin.com/posts", "site:substack.com")) else "business",
+                        "prospect_type": "individual_professional" if any(token in q.lower() for token in ("freelancer", "independent consultant", "konsultan independen", "content creator", "coach", "solopreneur", "solo founder", "site:linkedin.com/posts", "site:substack.com")) else "business",
                         "recipient_email":email,
                         "email_source_url":email_url or url,
                         "website_url":"" if is_social_url(url) else url,
@@ -687,7 +779,7 @@ def discover():
                     }
                     if len(found)>=MAX_PER_RUN:
                         print("DISCOVERY_STATS",json.dumps(stats,ensure_ascii=False))
-                        return list(found.values())
+                        return enrich_social_profiles(list(found.values()))
                     if email_results >= MAX_EMAIL_RESULTS_PER_QUERY:
                         break
             except Exception as e:
