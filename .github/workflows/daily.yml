@@ -65,4 +65,12 @@ jobs:
             exit 0
           fi
           git commit -m "chore: persist encrypted prospecting state [skip ci]"
-          git push
+          for attempt in 1 2 3; do
+            if git pull --rebase origin "$GITHUB_REF_NAME" && git push; then
+              exit 0
+            fi
+            git rebase --abort || true
+            sleep "$((attempt * 3))"
+          done
+          echo "Failed to persist encrypted prospecting state after retries."
+          exit 1
